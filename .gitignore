@@ -1,0 +1,32 @@
+# Core-code-only repository. Ignore everything unless explicitly allowed.
+/*
+
+# Repository metadata and documentation
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/requirements.txt
+
+# Core Python implementation
+!/config.py
+!/dgp.py
+!/methods.py
+!/simulation.py
+!/analysis.py
+!/realdata.py
+
+# Required compiled-backend source (generated libraries remain local)
+!/csrc/
+/csrc/*
+!/csrc/cfr_core.c
+
+# Defensive exclusions for generated artifacts
+__pycache__/
+*.py[cod]
+*.dll
+*.so
+*.dylib
+*.jsonl
+*.parquet
+*.npz
