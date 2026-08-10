@@ -140,15 +140,18 @@ static int fit_beta_with_buffers(
 
 API int cfr_bootstrap_change_batch(
     int samples, int weeks, int groups, const double *cases,
-    const double *sampled_deaths, const double *age, double lower,
+    const double *sampled_deaths, const double *age, double trim_fraction, double lower,
     double upper, double tolerance, int max_iterations, int *changes,
     double *beta_before, double *beta_after)
 {
     double *log_cases = (double *)malloc((size_t)weeks * groups * sizeof(double));
     double *observed_age = (double *)malloc((size_t)weeks * sizeof(double));
     double *totals = (double *)malloc((size_t)weeks * sizeof(double));
-    if (!log_cases || !observed_age || !totals) {
-        free(log_cases); free(observed_age); free(totals); return -1;
+    double *daily_score = (double *)malloc((size_t)weeks * sizeof(double));
+    double *daily_info = (double *)malloc((size_t)weeks * sizeof(double));
+    if (!log_cases || !observed_age || !totals || !daily_score || !daily_info) {
+        free(log_cases); free(observed_age); free(totals);
+        free(daily_score); free(daily_info); return -1;
     }
     for (int i = 0; i < weeks * groups; ++i)
         log_cases[i] = log(fmax(cases[i], 1e-12));
@@ -190,21 +193,44 @@ API int cfr_bootstrap_change_batch(
             double candidate = null_beta + total_score / fmax(total_info, 1e-14);
             null_beta = (candidate > lo && candidate < hi) ? candidate : 0.5 * (lo + hi);
         }
-        double cumulative = 0.0, largest = -1.0;
-        int change = 1;
-        for (int t = 0; t < weeks - 1; ++t) {
-            double max_eta = -INFINITY, denominator = 0.0, mean = 0.0;
+        double total_null_info = 0.0;
+        for (int t = 0; t < weeks; ++t) {
+            double max_eta = -INFINITY, denominator = 0.0;
+            double mean = 0.0, second = 0.0;
             for (int j = 0; j < groups; ++j) {
                 double eta = log_cases[t * groups + j] + null_beta * age[j];
                 if (eta > max_eta) max_eta = eta;
             }
             for (int j = 0; j < groups; ++j) {
                 double weight = exp(log_cases[t * groups + j] + null_beta * age[j] - max_eta);
-                denominator += weight; mean += weight * age[j];
+                denominator += weight;
+                mean += weight * age[j];
+                second += weight * age[j] * age[j];
             }
-            cumulative += observed_age[t] - totals[t] * mean / denominator;
+            mean /= denominator;
+            second /= denominator;
+            daily_score[t] = observed_age[t] - totals[t] * mean;
+            daily_info[t] = totals[t] * (second - mean * mean);
+            total_null_info += daily_info[t];
+        }
+        if (total_null_info <= 0.0) {
+            free(log_cases); free(observed_age); free(totals);
+            free(daily_score); free(daily_info); return -2;
+        }
+        double cumulative = 0.0, cumulative_info = 0.0, largest = -1.0;
+        int change = 1;
+        for (int t = 0; t < weeks - 1; ++t) {
+            cumulative += daily_score[t];
+            cumulative_info += daily_info[t];
+            double information_fraction = cumulative_info / total_null_info;
+            if (information_fraction < trim_fraction ||
+                information_fraction > 1.0 - trim_fraction) continue;
             double value = fabs(cumulative);
             if (value > largest) { largest = value; change = t + 1; }
+        }
+        if (largest < 0.0) {
+            free(log_cases); free(observed_age); free(totals);
+            free(daily_score); free(daily_info); return -3;
         }
         changes[b] = change;
         for (int segment = 0; segment < 2; ++segment) {
@@ -242,5 +268,7 @@ API int cfr_bootstrap_change_batch(
     free(log_cases);
     free(observed_age);
     free(totals);
+    free(daily_score);
+    free(daily_info);
     return 0;
 }

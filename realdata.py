@@ -13,7 +13,7 @@ import pandas as pd
 from config import CONFIG, FIGURE_DIR, TABLE_DIR
 from methods import (
     bootstrap_change_intervals, build_c_backend, delay_adjusted_exposure,
-    conditional_probabilities, gradient_change_test,
+    gradient_change_test,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -112,60 +112,50 @@ def _daily_arrays(data: pd.DataFrame, delay: np.ndarray, analysis_start, analysi
 
 def _plot(dates, exposure, deaths, result, intervals):
     FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    plt.rcParams.update({
-        "font.size": 8, "axes.spines.top": False, "axes.spines.right": False,
-        "pdf.fonttype": 42, "ps.fonttype": 42,
-    })
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.4), constrained_layout=True)
-    colors = ("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#6F4E37")
-    change_date = dates[result.estimated_change - 1]
+    dates = pd.to_datetime(np.asarray(dates))
+    plt.rcParams.update({"font.size": 8, "axes.spines.top": False, "axes.spines.right": False})
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.2), constrained_layout=True)
     for j, label in enumerate(AGE_LABELS):
-        axes[0, 0].plot(dates, exposure[:, j], lw=0.9, color=colors[j], label=label)
-        axes[0, 1].plot(dates, deaths[:, j], lw=0.8, color=colors[j], label=label)
+        axes[0, 0].plot(dates, exposure[:, j], lw=0.8, label=label)
+        axes[0, 1].plot(dates, deaths[:, j], lw=0.8, label=label)
     axes[0, 0].set_ylabel("Delay-aligned case exposure")
     axes[0, 1].set_ylabel("Recorded deaths")
     axes[0, 1].legend(ncol=2, frameon=False, fontsize=7)
     axes[1, 0].plot(dates, result.process, color="#0072B2", lw=1.2)
     axes[1, 0].axhline(result.critical_value, color="0.35", ls=":", lw=0.9)
     axes[1, 0].axhline(-result.critical_value, color="0.35", ls=":", lw=0.9)
-    axes[1, 0].axvline(change_date, color="#D55E00", ls="--", lw=1)
-    axes[1, 0].set_ylabel("DAGS score process")
+    axes[1, 0].axvline(dates[result.estimated_change - 1], color="#D55E00", ls="--", lw=1)
+    axes[1, 0].set_ylabel("DACT score bridge")
     axes[1, 0].set_xlabel("Death-calendar date")
-    for ax in (axes[0, 0], axes[0, 1]):
-        ax.axvline(change_date, color="#D55E00", ls="--", lw=0.9)
-
-    reference = 2  # 50--59 years
-    score_difference = AGE_SCORES - AGE_SCORES[reference]
-    x = np.arange(len(AGE_LABELS))
-    for index, label, color, linestyle, marker in (
-        (1, "Before change", "#0072B2", "-", "o"),
-        (2, "After change", "#D55E00", "--", "s"),
-    ):
-        beta = float(intervals["estimate"][index])
-        beta_lower = float(intervals["lower"][index])
-        beta_upper = float(intervals["upper"][index])
-        profile = np.exp(beta * score_difference)
-        endpoint_a = np.exp(beta_lower * score_difference)
-        endpoint_b = np.exp(beta_upper * score_difference)
-        lower = np.minimum(endpoint_a, endpoint_b)
-        upper = np.maximum(endpoint_a, endpoint_b)
-        axes[1, 1].fill_between(x, lower, upper, color=color, alpha=0.14, linewidth=0)
-        axes[1, 1].plot(x, profile, color=color, ls=linestyle, marker=marker,
-                        lw=1.3, ms=3.5, label=label)
-    axes[1, 1].axhline(1.0, color="0.45", lw=0.8, ls=":")
-    axes[1, 1].set_xticks(x, [label.replace("--", "-") for label in AGE_LABELS])
-    axes[1, 1].set_xlabel("Age group (years)")
-    axes[1, 1].set_ylabel("Relative fatality intensity\n(reference: 50--59 years)")
-    axes[1, 1].legend(frameon=False, fontsize=7)
-
     for ax in (axes[0, 0], axes[0, 1], axes[1, 0]):
-        locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-        ax.tick_params(axis="x", labelrotation=0)
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        ax.tick_params(axis="x", labelrotation=25)
+    reference = 2
+    contrasts = AGE_SCORES - AGE_SCORES[reference]
+    x = np.arange(len(AGE_LABELS))
+    for index, (name, color) in enumerate(
+            zip(("Before change", "After change"), ("#0072B2", "#D55E00")), start=1):
+        beta = intervals["estimate"][index]
+        beta_lo = intervals["lower"][index]
+        beta_hi = intervals["upper"][index]
+        profile = np.exp(beta * contrasts)
+        bound_a = np.exp(beta_lo * contrasts)
+        bound_b = np.exp(beta_hi * contrasts)
+        axes[1, 1].plot(x, profile, marker="o", ms=3.5, lw=1.25,
+                        color=color, label=name)
+        axes[1, 1].fill_between(
+            x, np.minimum(bound_a, bound_b), np.maximum(bound_a, bound_b),
+            color=color, alpha=0.14, linewidth=0,
+        )
+    axes[1, 1].axhline(1.0, color="0.45", ls=":", lw=0.8)
+    axes[1, 1].set_xticks(x, AGE_LABELS, rotation=30, ha="right")
+    axes[1, 1].set_ylabel("Model-implied relative death intensity\n(reference: 50--59 years)")
+    axes[1, 1].set_xlabel("Age group")
+    axes[1, 1].legend(frameon=False, fontsize=7)
     for panel, ax in enumerate(axes.ravel()):
         ax.grid(alpha=0.15)
-        ax.text(0.015, 0.98, f"({chr(97 + panel)})", transform=ax.transAxes,
+        ax.text(0.015, 0.97, f"({chr(97 + panel)})", transform=ax.transAxes,
                 va="top", ha="left", fontweight="bold")
     fig.savefig(FIGURE_DIR / "figure_application.pdf", bbox_inches="tight")
     fig.savefig(FIGURE_DIR / "figure_application.png", dpi=400, bbox_inches="tight")
@@ -195,27 +185,11 @@ def run(seed: int = 20260809, bootstrap_samples: int = 2000,
         bootstrap_samples=bootstrap_samples,
     )
     delta = float(intervals["estimate"][2] - intervals["estimate"][1])
-    fitted_probability = np.empty_like(exposure, dtype=float)
-    fitted_probability[: result.estimated_change] = conditional_probabilities(
-        exposure[: result.estimated_change], AGE_SCORES, intervals["estimate"][1]
-    )
-    fitted_probability[result.estimated_change :] = conditional_probabilities(
-        exposure[result.estimated_change :], AGE_SCORES, intervals["estimate"][2]
-    )
-    totals = deaths.sum(axis=1)
-    fitted_mean = totals[:, None] * fitted_probability
-    active = fitted_mean > 1.0e-12
-    pearson = float(np.sum((deaths[active] - fitted_mean[active]) ** 2 / fitted_mean[active]))
-    dispersion_df = int(np.count_nonzero(totals) * (deaths.shape[1] - 1) - 2)
-    dispersion = pearson / dispersion_df
-    dispersion_adjusted_statistic = result.statistic / np.sqrt(max(dispersion, 1.0))
     output = {
         "analysis_start": str(dates[0].date()), "analysis_end": str(dates[-1].date()),
         "eligible_history_cases": int(len(cohort)), "recorded_deaths_in_window": int(len(fatal)),
         "daily_deaths": int(deaths.sum()), "delay": delay_diagnostics,
         "statistic": result.statistic, "critical_value": result.critical_value,
-        "pearson_dispersion": dispersion,
-        "dispersion_adjusted_statistic": dispersion_adjusted_statistic,
         "gaussian_p_value": result.p_value, "bootstrap_p_value": validation.p_value,
         "estimated_change_index": int(result.estimated_change),
         "estimated_change_date": str(dates[result.estimated_change - 1].date()),

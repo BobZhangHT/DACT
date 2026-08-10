@@ -3,4 +3,5 @@ scipy>=1.13
 pandas>=2.0
 matplotlib>=3.8
 tqdm>=4.66
-
+pyarrow>=15.0
+pytest>=8.0

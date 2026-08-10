@@ -135,17 +135,30 @@ def _cells(experiment: str, mode: Mode) -> list[dict]:
             for mag in (0.015, 0.025, 0.035, 0.050)
             for frac in (0.25, 0.50, 0.75) for m in CONFIG.simulation.methods
         ]
-        sparse = [
+        # Keep the original early-change cells first so that --resume preserves
+        # their existing cell identifiers, then add the central and late cases.
+        sparse_early = [
             {"scenario": "A3", "days": d, "death_scale": 1.0,
              "magnitude": 0.025, "change_fraction": 0.25, "method": m}
             for d in (90, 180, 365) for m in CONFIG.simulation.methods
         ]
-        return nulls + alternatives + sparse
+        sparse_other = [
+            {"scenario": "A3", "days": d, "death_scale": 1.0,
+             "magnitude": 0.025, "change_fraction": frac, "method": m}
+            for frac in (0.50, 0.75) for d in (90, 180, 365)
+            for m in CONFIG.simulation.methods
+        ]
+        return nulls + alternatives + sparse_early + sparse_other
     if experiment == "intervals":
-        return [
+        regular = [
             {"scenario": s, "days": 180, "magnitude": mag, "change_fraction": 0.50}
             for s in ("A1", "A2") for mag in (0.025, 0.050)
         ]
+        sparse = [
+            {"scenario": "A3", "days": 180, "magnitude": mag, "change_fraction": 0.25}
+            for mag in (0.025, 0.050)
+        ]
+        return regular + sparse
     if experiment == "sensitivity":
         cells = []
         for value in CONFIG.simulation.delay_multiplier_grid:

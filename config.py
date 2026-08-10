@@ -97,7 +97,7 @@ SCENARIOS: dict[str, dict] = {
     "N3": {"label": "age-specific delay", "change": False, "setting": "age_delay"},
     "A1": {"label": "central flattening", "change": True, "setting": "baseline"},
     "A2": {"label": "central steepening", "change": True, "setting": "steepening"},
-    "A3": {"label": "early sparse flattening", "change": True,
+    "A3": {"label": "sparse flattening", "change": True,
            "setting": "sparse", "change_fraction": 0.25},
 }
 

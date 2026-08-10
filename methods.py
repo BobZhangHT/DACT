@@ -39,7 +39,7 @@ class GradientFit:
 
 
 @dataclass
-class CUSUMResult:
+class ChangeTestResult:
     statistic: float
     critical_value: float
     p_value: float
@@ -116,6 +116,7 @@ def _load_c_backend() -> ctypes.CDLL:
                 lib.cfr_fit_beta.restype = ctypes.c_int
                 lib.cfr_bootstrap_change_batch.argtypes = [
                     ctypes.c_int, ctypes.c_int, ctypes.c_int, arr, arr, arr,
+                    ctypes.c_double,
                     ctypes.c_double, ctypes.c_double, ctypes.c_double,
                     ctypes.c_int,
                     ndpointer(dtype=np.int32, ndim=1, flags="C_CONTIGUOUS"),
@@ -322,7 +323,7 @@ def _process_from_fit(fit: GradientFit, kind: Functional = "cusum") -> tuple[np.
     information_time = cumulative_information / total_information
     cumulative_score = np.cumsum(fit.score)
     process = cumulative_score / np.sqrt(total_information)
-    # The CUSUM and CvM functionals use the complete interval. The supLM
+    # The maximum-score and CvM functionals use the complete interval. The supLM
     # functional divides by u(1-u) and therefore uses conventional trimming.
     fraction = (max(CONFIG.method.minimum_information_fraction, CONFIG.method.lm_trim)
                 if kind == "sup_lm" else CONFIG.method.minimum_information_fraction)
@@ -398,7 +399,7 @@ def gradient_change_test(
     backend: Backend | None = None, bootstrap_samples: int | None = None,
     gaussian_samples: int | None = None,
     cfg: MethodConfig = CONFIG.method,
-) -> CUSUMResult:
+) -> ChangeTestResult:
     active_cases = np.asarray(cases, dtype=float)
     kind: Functional = "cusum"
     calibration = "kolmogorov"
@@ -440,7 +441,7 @@ def gradient_change_test(
         )
         critical = float(np.quantile(boot, 1.0 - cfg.alpha, method="higher"))
         p_value = float((1 + np.count_nonzero(boot >= statistic)) / (count + 1))
-    return CUSUMResult(
+    return ChangeTestResult(
         statistic, critical, p_value, bool(statistic > critical), change,
         process, information_time, fit, calibration, boot,
     )
@@ -490,7 +491,8 @@ def bootstrap_change_intervals(
         beta_after = np.empty(count, dtype=np.float64)
         status = _load_c_backend().cfr_bootstrap_change_batch(
             count, cases.shape[0], cases.shape[1], active_cases.ravel(),
-            active_deaths.ravel(), active_scores, CONFIG.method.beta_bounds[0],
+            active_deaths.ravel(), active_scores,
+            CONFIG.method.minimum_information_fraction, CONFIG.method.beta_bounds[0],
             CONFIG.method.beta_bounds[1], CONFIG.method.root_tolerance,
             CONFIG.method.root_max_iterations, changes, beta_before, beta_after,
         )
@@ -524,29 +526,20 @@ def bootstrap_change_intervals(
     }
 
 
-def delay_cusum_test(
+def dact_test(
     exposure: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     rng: np.random.Generator, *, calibration: str = "gaussian",
     backend: Backend | None = None, samples: int | None = None,
-) -> CUSUMResult:
-    """Run the proposed delay-adjusted CUSUM with the requested calibration."""
+) -> ChangeTestResult:
+    """Run the delay-adjusted change test (DACT)."""
     method = {"gaussian": "proposed_gaussian", "bootstrap": "proposed_bootstrap",
               "asymptotic": "proposed_asymptotic"}.get(calibration)
     if method is None:
         raise ValueError("calibration must be 'gaussian', 'bootstrap', or 'asymptotic'")
-    kwargs = {"bootstrap_samples": samples} if calibration == "bootstrap" else {"gaussian_samples": samples}
-    return gradient_change_test(exposure, deaths, age_scores, method, rng, backend=backend, **kwargs)
-
-
-def dags_test(
-    exposure: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
-    rng: np.random.Generator, *, calibration: str = "gaussian",
-    backend: Backend | None = None, samples: int | None = None,
-) -> CUSUMResult:
-    """Run the delay-adjusted age-gradient scan (DAGS)."""
-    return delay_cusum_test(
-        exposure, deaths, age_scores, rng, calibration=calibration,
-        backend=backend, samples=samples,
+    kwargs = ({"bootstrap_samples": samples} if calibration == "bootstrap"
+              else {"gaussian_samples": samples})
+    return gradient_change_test(
+        exposure, deaths, age_scores, method, rng, backend=backend, **kwargs
     )
 
 
@@ -554,7 +547,7 @@ def sup_lm_test(
     exposure: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     rng: np.random.Generator, *, backend: Backend | None = None,
     gaussian_samples: int | None = None,
-) -> CUSUMResult:
+) -> ChangeTestResult:
     """Run the published supLM fluctuation-process benchmark."""
     return gradient_change_test(exposure, deaths, age_scores, "sup_lm", rng,
                                 backend=backend, gaussian_samples=gaussian_samples)
@@ -564,38 +557,28 @@ def cvm_test(
     exposure: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     rng: np.random.Generator, *, backend: Backend | None = None,
     gaussian_samples: int | None = None,
-) -> CUSUMResult:
+) -> ChangeTestResult:
     """Run the Cramer--von Mises fluctuation-process benchmark."""
     return gradient_change_test(exposure, deaths, age_scores, "cvm", rng,
                                 backend=backend, gaussian_samples=gaussian_samples)
 
 
-def no_delay_cusum_test(
+def no_delay_dact_test(
     daily_cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     rng: np.random.Generator, *, backend: Backend | None = None,
     gaussian_samples: int | None = None,
-) -> CUSUMResult:
-    """Run the deliberately misspecified CUSUM using same-day cases."""
-    return gradient_change_test(np.asarray(daily_cases, dtype=float), deaths, age_scores,
-                                "proposed_gaussian", rng, backend=backend,
-                                gaussian_samples=gaussian_samples)
-
-
-def no_delay_dags_test(
-    daily_cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
-    rng: np.random.Generator, *, backend: Backend | None = None,
-    gaussian_samples: int | None = None,
-) -> CUSUMResult:
-    """Run DAGS with same-day cases instead of delay-adjusted exposure."""
-    return no_delay_cusum_test(
-        daily_cases, deaths, age_scores, rng, backend=backend,
+) -> ChangeTestResult:
+    """Run DACT with same-day cases in place of delay-adjusted exposure."""
+    return gradient_change_test(
+        np.asarray(daily_cases, dtype=float), deaths, age_scores,
+        "proposed_gaussian", rng, backend=backend,
         gaussian_samples=gaussian_samples,
     )
 
 
 def available_tests() -> tuple[str, ...]:
     """Return the stable public names accepted by :func:`run_test`."""
-    return ("dags", "sup_lm", "cvm", "no_delay_dags")
+    return ("dact", "sup_lm", "cvm", "no_delay_dact")
 
 
 def run_test(
@@ -603,23 +586,23 @@ def run_test(
     age_scores: np.ndarray, rng: np.random.Generator, *,
     backend: Backend | None = None, samples: int | None = None,
     calibration: str = "gaussian",
-) -> CUSUMResult:
+) -> ChangeTestResult:
     """Run any manuscript method through one public interface.
 
     Parameters
     ----------
     name:
-        One of ``dags``, ``sup_lm``, ``cvm``, or ``no_delay_dags``.  The
-        first three expect delay-adjusted exposure;
+        One of ``dact``, ``sup_lm``, ``cvm``, or
+        ``no_delay_dact``.  The first three expect delay-adjusted exposure;
         the last expects same-day case counts.
     backend:
         ``"c"`` (the project default) or ``"python"``.
     samples:
         Number of Gaussian paths, or conditional-bootstrap samples when
-        ``calibration="bootstrap"`` for ``dags``.
+        ``calibration="bootstrap"`` for ``dact``.
     """
-    if name in {"dags", "delay_cusum"}:
-        return dags_test(
+    if name == "dact":
+        return dact_test(
             exposure_or_cases, deaths, age_scores, rng,
             calibration=calibration, backend=backend, samples=samples,
         )
@@ -633,8 +616,8 @@ def run_test(
             exposure_or_cases, deaths, age_scores, rng,
             backend=backend, gaussian_samples=samples,
         )
-    if name in {"no_delay_dags", "no_delay_cusum"}:
-        return no_delay_dags_test(
+    if name == "no_delay_dact":
+        return no_delay_dact_test(
             exposure_or_cases, deaths, age_scores, rng,
             backend=backend, gaussian_samples=samples,
         )
@@ -660,12 +643,12 @@ def verify_backend_equivalence(
 
 
 __all__ = [
-    "GradientFit", "CUSUMResult", "ChangeEstimate", "build_c_backend",
+    "GradientFit", "ChangeTestResult", "ChangeEstimate", "build_c_backend",
     "delay_adjusted_exposure_python", "delay_adjusted_exposure_c", "delay_adjusted_exposure",
     "conditional_probabilities", "conditional_components_python",
     "conditional_components_c", "conditional_components", "fit_gradient_python",
     "fit_gradient_c", "fit_gradient", "gradient_change_test", "estimate_change",
-    "bootstrap_change_intervals", "dags_test", "delay_cusum_test", "sup_lm_test", "cvm_test",
-    "no_delay_dags_test", "no_delay_cusum_test", "available_tests", "run_test",
+    "bootstrap_change_intervals", "dact_test", "sup_lm_test", "cvm_test",
+    "no_delay_dact_test", "available_tests", "run_test",
     "verify_backend_equivalence",
 ]

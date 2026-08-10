@@ -1,4 +1,4 @@
-# Core-code-only repository. Ignore everything unless explicitly allowed.
+# Core-code-only repository: ignore everything unless explicitly allowed.
 /*
 
 # Repository metadata and documentation
@@ -6,7 +6,9 @@
 !/.gitattributes
 !/README.md
 !/LICENSE
+!/CITATION.cff
 !/requirements.txt
+!/pytest.ini
 
 # Core Python implementation
 !/config.py
@@ -16,17 +18,29 @@
 !/analysis.py
 !/realdata.py
 
-# Required compiled-backend source (generated libraries remain local)
+# Native C source; compiled libraries remain local
 !/csrc/
 /csrc/*
 !/csrc/cfr_core.c
 
-# Defensive exclusions for generated artifacts
-__pycache__/
-*.py[cod]
-*.dll
-*.so
-*.dylib
-*.jsonl
-*.parquet
-*.npz
+# Reproducibility helpers
+!/scripts/
+/scripts/*
+!/scripts/__init__.py
+!/scripts/realdata_sensitivity.py
+
+# Tests
+!/tests/
+/tests/*
+!/tests/test_*.py
+
+# Defensive exclusions for generated or local material
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/*.dll
+**/*.so
+**/*.dylib
+**/*.jsonl
+**/*.parquet
+**/*.npz
