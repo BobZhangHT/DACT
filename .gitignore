@@ -27,6 +27,7 @@
 !/scripts/
 /scripts/*
 !/scripts/__init__.py
+!/scripts/benchmark.py
 !/scripts/realdata_sensitivity.py
 
 # Tests

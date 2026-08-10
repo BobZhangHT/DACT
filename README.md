@@ -66,6 +66,7 @@ python analysis.py --mode demo
 # Manuscript-scale study
 python simulation.py --mode full --backend c --resume
 python analysis.py --mode full
+python -m scripts.benchmark
 ```
 
 Simulation jobs are parallel and restartable. Use `--workers N` to set the
@@ -117,6 +118,7 @@ and Python backends.
 - `config.py`: fixed model, method, and simulation settings
 - `csrc/cfr_core.c`: native C implementation
 - `scripts/realdata_sensitivity.py`: 60/90/120-day delay comparison
+- `scripts/benchmark.py`: reproducible single-process runtime benchmark
 - `tests/`: numerical and pipeline tests
 
 Only these source files, tests, and repository metadata are admitted by the

@@ -256,10 +256,6 @@ def power_figure(df: pd.DataFrame, output_dir: Path):
 def run(mode: str):
     ensure_directories()
     testing_raw = _load(RAW_DIR / f"{mode}_testing.jsonl")
-    corrected_suplm = _load(RAW_DIR / f"{mode}_testing_suplm_corrected.jsonl")
-    if not corrected_suplm.empty:
-        testing_raw = pd.concat([testing_raw, corrected_suplm], ignore_index=True)
-        testing_raw = testing_raw.drop_duplicates("key", keep="last")
     interval_raw = _load(RAW_DIR / f"{mode}_intervals.jsonl")
     sensitivity_raw = _load(RAW_DIR / f"{mode}_sensitivity.jsonl")
     testing = aggregate_testing(testing_raw) if not testing_raw.empty else pd.DataFrame()
