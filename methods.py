@@ -1,4 +1,4 @@
-"""Age-gradient CFR change-point methods with equivalent C/Python backends."""
+"""Delay-adjusted age-effect change tests with equivalent C/Python backends."""
 from __future__ import annotations
 
 import ctypes
@@ -36,6 +36,8 @@ class GradientFit:
     success: bool
     iterations: int
     backend: str
+    status: str = "converged"
+    boundary: bool = False
 
 
 @dataclass
@@ -50,6 +52,7 @@ class ChangeTestResult:
     null_fit: GradientFit
     calibration: str
     bootstrap_statistics: np.ndarray | None = None
+    bootstrap_diagnostics: dict | None = None
 
 
 @dataclass
@@ -59,6 +62,20 @@ class ChangeEstimate:
     beta_after: float
     null_beta: float
     success: bool
+    status: str = "converged"
+
+
+class BootstrapFitError(RuntimeError):
+    """Too few valid draws; diagnostics retain every attempted fit's status."""
+
+    def __init__(self, diagnostics: dict):
+        self.diagnostics = diagnostics
+        super().__init__(f"insufficient valid bootstrap fits: {diagnostics['n_successful']}"
+                         f"/{diagnostics['n_requested']}; failures were excluded, not retried")
+
+
+_FIT_STATUS = {0: "converged", 1: "boundary", 2: "max_iterations",
+               3: "nonfinite", 4: "no_information", 5: "no_admissible_change"}
 
 
 def _compiler() -> str:
@@ -121,6 +138,7 @@ def _load_c_backend() -> ctypes.CDLL:
                     ctypes.c_int,
                     ndpointer(dtype=np.int32, ndim=1, flags="C_CONTIGUOUS"),
                     arr, arr,
+                    ndpointer(dtype=np.int32, ndim=1, flags="C_CONTIGUOUS"),
                 ]
                 lib.cfr_bootstrap_change_batch.restype = ctypes.c_int
                 _C_HANDLE = lib
@@ -129,6 +147,8 @@ def _load_c_backend() -> ctypes.CDLL:
 
 def resolve_backend(backend: Backend | None = None) -> Backend:
     active = backend or CONFIG.method.backend
+    if active not in ("c", "python"):
+        raise ValueError("backend must be 'c' or 'python'")
     if active == "c":
         _load_c_backend()
     return active
@@ -138,44 +158,72 @@ def _arrays(cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray) -> tu
     c = np.ascontiguousarray(cases, dtype=np.float64)
     d = np.ascontiguousarray(deaths, dtype=np.float64)
     a = np.ascontiguousarray(age_scores, dtype=np.float64)
-    if c.ndim != 2 or d.shape != c.shape or a.shape != (c.shape[1],):
+    if c.ndim != 2 or 0 in c.shape or d.shape != c.shape or a.shape != (c.shape[1],):
         raise ValueError("cases/deaths must be T by J and age_scores must have length J")
-    if np.any(c < 0) or np.any(d < 0) or np.any(c.sum(axis=1) <= 0):
-        raise ValueError("exposures must be nonnegative with positive row totals; deaths must be nonnegative")
+    if not all(np.all(np.isfinite(x)) for x in (c, d, a)):
+        raise ValueError("exposures, deaths and age_scores must be finite")
+    if np.any(c < 0) or np.any(d < 0):
+        raise ValueError("exposures and deaths must be nonnegative")
+    if np.any((c == 0) & (d > 0)):
+        raise ValueError("positive deaths with zero exposure are incompatible")
     return c, d, a
+
+
+def _positive_integer(value, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _validate_fit_config(cfg: MethodConfig) -> None:
+    if (len(cfg.beta_bounds) != 2 or not np.all(np.isfinite(cfg.beta_bounds))
+            or cfg.beta_bounds[0] >= cfg.beta_bounds[1]):
+        raise ValueError("beta_bounds must be finite and strictly increasing")
+    if not np.isfinite(cfg.root_tolerance) or cfg.root_tolerance <= 0:
+        raise ValueError("root_tolerance must be finite and positive")
+    _positive_integer(cfg.root_max_iterations, "root_max_iterations")
+    if any(not np.isfinite(x) or not 0 <= x < 0.5
+           for x in (cfg.minimum_information_fraction, cfg.lm_trim)):
+        raise ValueError("information trimming fractions must lie in [0, 0.5)")
+
+
+def _delay_arrays(cases, delay, outcome_days):
+    c = np.ascontiguousarray(cases, dtype=np.float64)
+    f = np.ascontiguousarray(delay, dtype=np.float64)
+    if c.ndim != 2 or f.ndim != 2 or 0 in c.shape or 0 in f.shape or c.shape[1] != f.shape[0]:
+        raise ValueError("cases must be nonempty R x J and delay must be J x L")
+    if (not np.all(np.isfinite(c)) or not np.all(np.isfinite(f))
+            or np.any(c < 0) or np.any(f < 0) or not np.allclose(f.sum(axis=1), 1.0)):
+        raise ValueError("counts and delay masses must be finite, nonnegative and normalized")
+    return c, f, c.shape[0] if outcome_days is None else _positive_integer(outcome_days, "outcome_days")
 
 
 def delay_adjusted_exposure_python(
     cases: np.ndarray, delay: np.ndarray, outcome_days: int | None = None,
 ) -> np.ndarray:
     """Convolve daily age-specific cases with the case-to-death delay mass."""
-    c = np.asarray(cases, dtype=float)
-    f = np.asarray(delay, dtype=float)
-    if c.ndim != 2 or f.ndim != 2 or c.shape[1] != f.shape[0]:
-        raise ValueError("cases must be R x J and delay must be J x L")
-    if np.any(c < 0) or np.any(f < 0) or not np.allclose(f.sum(axis=1), 1.0):
-        raise ValueError("counts and delay masses must be valid")
-    T = int(outcome_days or c.shape[0])
+    c, f, T = _delay_arrays(cases, delay, outcome_days)
     output = np.zeros((T, c.shape[1]), dtype=float)
     for j in range(c.shape[1]):
-        output[:, j] = np.convolve(c[:, j], f[j])[:T]
+        convolution = np.convolve(c[:, j], f[j])[:T]
+        output[:len(convolution), j] = convolution
+    if not np.all(np.isfinite(output)):
+        raise ValueError("delay convolution produced nonfinite exposure")
     return output
 
 
 def delay_adjusted_exposure_c(
     cases: np.ndarray, delay: np.ndarray, outcome_days: int | None = None,
 ) -> np.ndarray:
-    c = np.ascontiguousarray(cases, dtype=np.float64)
-    f = np.ascontiguousarray(delay, dtype=np.float64)
-    if c.ndim != 2 or f.ndim != 2 or c.shape[1] != f.shape[0]:
-        raise ValueError("cases must be R x J and delay must be J x L")
-    T = int(outcome_days or c.shape[0])
+    c, f, T = _delay_arrays(cases, delay, outcome_days)
     output = np.empty((T, c.shape[1]), dtype=np.float64)
     status = _load_c_backend().cfr_delay_exposure(
         c.shape[0], T, c.shape[1], f.shape[1], c.ravel(), f.ravel(), output.ravel()
     )
     if status:
         raise RuntimeError("C delay convolution failed")
+    if not np.all(np.isfinite(output)):
+        raise ValueError("delay convolution produced nonfinite exposure")
     return output
 
 
@@ -188,25 +236,36 @@ def delay_adjusted_exposure(
 
 
 def conditional_probabilities(cases: np.ndarray, age_scores: np.ndarray, beta: float) -> np.ndarray:
-    c = np.asarray(cases, dtype=float)
-    a = np.asarray(age_scores, dtype=float)
-    eta = np.log(c) + float(beta) * a[None, :]
+    c, _, a = _arrays(cases, np.zeros_like(cases), age_scores)
+    return np.exp(_log_probabilities(c, a, beta))
+
+
+def _log_probabilities(c, a, beta):
+    if not np.isfinite(beta):
+        raise ValueError("beta must be finite")
+    eta = np.full_like(c, -np.inf)
+    np.log(c, out=eta, where=c > 0)
+    eta += float(beta) * a[None, :]
+    # An all-zero exposure row has zero deaths. Its conditional distribution
+    # is irrelevant (N=0); use uniform probabilities so multinomial sampling works.
+    eta[~np.any(c > 0, axis=1)] = 0.0
     eta -= eta.max(axis=1, keepdims=True)
-    probability = np.exp(eta)
-    return probability / probability.sum(axis=1, keepdims=True)
+    return eta - np.log(np.exp(eta).sum(axis=1, keepdims=True))
 
 
 def conditional_components_python(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray, beta: float
 ) -> tuple[float, np.ndarray, np.ndarray]:
     c, d, a = _arrays(cases, deaths, age_scores)
-    probability = conditional_probabilities(c, a, beta)
+    log_probability = _log_probabilities(c, a, beta)
+    probability = np.exp(log_probability)
     totals = d.sum(axis=1)
     mean_age = probability @ a
     observed_age = d @ a
     score = observed_age - totals * mean_age
     information = totals * np.sum(probability * (a[None, :] - mean_age[:, None]) ** 2, axis=1)
-    loglik = float(np.sum(np.where(d > 0, d * np.log(probability), 0.0)))
+    positive = d > 0
+    loglik = float(np.sum(d[positive] * log_probability[positive]))
     return loglik, score, information
 
 
@@ -214,6 +273,8 @@ def conditional_components_c(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray, beta: float
 ) -> tuple[float, np.ndarray, np.ndarray]:
     c, d, a = _arrays(cases, deaths, age_scores)
+    if not np.isfinite(beta):
+        raise ValueError("beta must be finite")
     score = np.empty(c.shape[0], dtype=np.float64)
     information = np.empty(c.shape[0], dtype=np.float64)
     loglik = _load_c_backend().cfr_conditional_components(
@@ -230,33 +291,59 @@ def conditional_components(
     return fn(cases, deaths, age_scores, beta)
 
 
+def _gradient_fit(c, d, a, beta, iterations, backend, status, cfg):
+    fn = conditional_components_c if backend == "c" else conditional_components_python
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        loglik, score, information = fn(c, d, a, beta)
+        probabilities = conditional_probabilities(c, a, beta)
+        finite = (np.isfinite(loglik) and np.isfinite(beta)
+                  and all(np.all(np.isfinite(x)) for x in (score, information, probabilities))
+                  and np.isfinite(information.sum()) and np.isfinite(score.sum()))
+    boundary = bool(beta == cfg.beta_bounds[0] or beta == cfg.beta_bounds[1])
+    if not finite:
+        status = "nonfinite"
+    elif information.sum() <= 0:
+        status = "no_information"
+    elif boundary:
+        status = "boundary"
+    return GradientFit(float(beta), loglik, score, information, probabilities,
+                       status == "converged", iterations, backend, status, boundary)
+
+
 def fit_gradient_python(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     cfg: MethodConfig = CONFIG.method,
 ) -> GradientFit:
+    c, d, a = _arrays(cases, deaths, age_scores)
+    _validate_fit_config(cfg)
     lower, upper = cfg.beta_bounds
-    _, score_lower, _ = conditional_components_python(cases, deaths, age_scores, lower)
-    _, score_upper, _ = conditional_components_python(cases, deaths, age_scores, upper)
+    _, score_lower, _ = conditional_components_python(c, d, a, lower)
+    _, score_upper, _ = conditional_components_python(c, d, a, upper)
     iterations = 0
-    if score_lower.sum() <= 0:
-        beta = lower
+    status = "max_iterations"
+    beta = 0.5 * lower + 0.5 * upper
+    if not np.isfinite(score_lower.sum()) or not np.isfinite(score_upper.sum()):
+        status = "nonfinite"
+    elif score_lower.sum() <= 0:
+        beta, status = lower, "boundary"
     elif score_upper.sum() >= 0:
-        beta = upper
+        beta, status = upper, "boundary"
     else:
-        for iterations in range(cfg.root_max_iterations):
-            beta = 0.5 * (lower + upper)
-            _, score, _ = conditional_components_python(cases, deaths, age_scores, beta)
-            if abs(score.sum()) <= cfg.root_tolerance or upper - lower <= cfg.root_tolerance:
+        for iterations in range(1, cfg.root_max_iterations + 1):
+            beta = 0.5 * lower + 0.5 * upper
+            _, score, _ = conditional_components_python(c, d, a, beta)
+            value = score.sum()
+            if not np.isfinite(value):
+                status = "nonfinite"
                 break
-            if score.sum() > 0:
+            if abs(value) <= cfg.root_tolerance or upper - lower <= cfg.root_tolerance:
+                status = "converged"
+                break
+            if value > 0:
                 lower = beta
             else:
                 upper = beta
-        beta = 0.5 * (lower + upper)
-    loglik, score, information = conditional_components_python(cases, deaths, age_scores, beta)
-    return GradientFit(float(beta), loglik, score, information,
-                       conditional_probabilities(cases, age_scores, beta), True,
-                       iterations + 1, "python")
+    return _gradient_fit(c, d, a, beta, iterations, "python", status, cfg)
 
 
 def fit_gradient_c(
@@ -264,6 +351,7 @@ def fit_gradient_c(
     cfg: MethodConfig = CONFIG.method,
 ) -> GradientFit:
     c, d, a = _arrays(cases, deaths, age_scores)
+    _validate_fit_config(cfg)
     beta = np.empty(1, dtype=np.float64)
     loglik = np.empty(1, dtype=np.float64)
     iterations = np.zeros(1, dtype=np.int32)
@@ -272,10 +360,9 @@ def fit_gradient_c(
         cfg.beta_bounds[0], cfg.beta_bounds[1], cfg.root_tolerance,
         cfg.root_max_iterations, beta, loglik, iterations,
     )
-    value, score, information = conditional_components_c(c, d, a, beta[0])
-    return GradientFit(float(beta[0]), float(value), score, information,
-                       conditional_probabilities(c, a, beta[0]), status == 0,
-                       int(iterations[0]), "c")
+    if status < 0:
+        raise RuntimeError(f"C fit failed with status {status}")
+    return _gradient_fit(c, d, a, beta[0], int(iterations[0]), "c", _FIT_STATUS[status], cfg)
 
 
 def fit_gradient(
@@ -315,18 +402,24 @@ def _kolmogorov_quantile(probability: float) -> float:
     return 0.5 * (lower + upper)
 
 
-def _process_from_fit(fit: GradientFit, kind: Functional = "cusum") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _process_from_fit(fit: GradientFit, kind: Functional = "cusum",
+                      cfg: MethodConfig = CONFIG.method) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not fit.success:
+        raise ValueError(f"unusable gradient fit: {fit.status}")
+    if (not np.isfinite(fit.beta) or not np.isfinite(fit.loglik)
+            or not all(np.all(np.isfinite(x)) for x in (fit.score, fit.information, fit.probabilities))):
+        raise ValueError("nonfinite gradient fit")
     total_information = float(fit.information.sum())
-    if total_information <= 0:
+    if not np.isfinite(total_information) or total_information <= 0:
         raise ValueError("the data contain no age-gradient information")
     cumulative_information = np.cumsum(fit.information)
     information_time = cumulative_information / total_information
     cumulative_score = np.cumsum(fit.score)
     process = cumulative_score / np.sqrt(total_information)
-    # The maximum-score and CvM functionals use the complete interval. The supLM
-    # functional divides by u(1-u) and therefore uses conventional trimming.
-    fraction = (max(CONFIG.method.minimum_information_fraction, CONFIG.method.lm_trim)
-                if kind == "sup_lm" else CONFIG.method.minimum_information_fraction)
+    # DACT searches the information-trimmed interval (15% by default).
+    # supLM additionally applies lm_trim; CvM integrates the full bridge.
+    fraction = (max(cfg.minimum_information_fraction, cfg.lm_trim)
+                if kind == "sup_lm" else cfg.minimum_information_fraction)
     admissible = np.flatnonzero(
         (information_time[:-1] >= fraction) & (information_time[:-1] <= 1.0 - fraction)
     )
@@ -338,9 +431,14 @@ def _process_from_fit(fit: GradientFit, kind: Functional = "cusum") -> tuple[np.
 def _observed_statistic(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     backend: Backend | None, kind: Functional = "cusum",
+    cfg: MethodConfig = CONFIG.method,
 ) -> tuple[float, int, np.ndarray, np.ndarray, GradientFit]:
-    fit = fit_gradient(cases, deaths, age_scores, backend)
-    process, information_time, admissible = _process_from_fit(fit, kind)
+    fit = fit_gradient(cases, deaths, age_scores, backend, cfg)
+    return _statistic_from_fit(fit, kind, cfg)
+
+
+def _statistic_from_fit(fit, kind, cfg):
+    process, information_time, admissible = _process_from_fit(fit, kind, cfg)
     local = np.abs(process[admissible])
     index = int(admissible[int(np.argmax(local))])
     if kind == "cusum":
@@ -355,24 +453,74 @@ def _observed_statistic(
     return statistic, index + 1, process, information_time, fit
 
 
+def _bootstrap_diagnostics(statuses):
+    statuses = np.asarray(statuses, dtype=str)
+    success = statuses == "converged"
+    return {
+        "policy": "exclude failed/nonfinite draws; no retries; require >=2 valid draws",
+        "n_requested": len(statuses), "n_successful": int(success.sum()),
+        "n_failed": int((~success).sum()), "n_retried": 0,
+        "success_mask": success, "fit_status": statuses,
+        "failure_counts": {str(s): int(np.count_nonzero(statuses == s))
+                           for s in np.unique(statuses[~success])},
+    }
+
+
+def _bootstrap_totals(deaths):
+    totals = np.sum(deaths, axis=1)
+    if (not np.all(np.isfinite(totals)) or np.any(totals != np.floor(totals))
+            or np.any(totals >= np.iinfo(np.int64).max)):
+        raise ValueError("bootstrap death totals must be finite integers in int64 range")
+    return totals.astype(np.int64)
+
+
 def _bootstrap_statistics(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     fit: GradientFit, rng: np.random.Generator, backend: Backend | None,
-    kind: Functional, samples: int,
+    kind: Functional, samples: int, cfg: MethodConfig = CONFIG.method,
+    diagnostics: dict | None = None,
 ) -> np.ndarray:
-    totals = deaths.sum(axis=1).astype(int)
-    values = np.empty(samples, dtype=float)
+    totals = _bootstrap_totals(deaths)
+    values = np.full(samples, np.nan)
+    statuses = []
     for b in range(samples):
         sampled = np.vstack([
             rng.multinomial(int(totals[t]), fit.probabilities[t]) for t in range(cases.shape[0])
         ])
-        values[b] = _observed_statistic(cases, sampled, age_scores, backend, kind)[0]
+        fitted = fit_gradient(cases, sampled, age_scores, backend, cfg)
+        status = (fitted.status if fitted.status != "converged" else "fit_failed") if not fitted.success else "converged"
+        if fitted.success:
+            try:
+                value = _statistic_from_fit(fitted, kind, cfg)[0]
+                if np.isfinite(value):
+                    values[b] = value
+                else:
+                    status = "nonfinite"
+            except ValueError as exc:
+                status = "nonfinite" if "nonfinite" in str(exc) else "no_admissible_change"
+        statuses.append(status)
+    report = _bootstrap_diagnostics(statuses)
+    if diagnostics is not None:
+        diagnostics.update(report)
+    if report["n_successful"] < 2:
+        raise BootstrapFitError(report)
     return values
+
+
+def _rank_calibration(statistic, simulated, alpha):
+    """Strict order-statistic cutoff exactly matching the conservative rank p-value."""
+    values = np.asarray(simulated, dtype=float)
+    values = values[np.isfinite(values)]
+    count = len(values)
+    k = count + 1 - int(np.floor(alpha * (count + 1)))  # one-based index
+    critical = np.inf if k > count else float(np.partition(values, k - 1)[k - 1])
+    p_value = float((1 + np.count_nonzero(values >= statistic)) / (count + 1))
+    return critical, p_value
 
 
 def _gaussian_bridge_statistics(
     information_time: np.ndarray, rng: np.random.Generator, samples: int,
-    kind: Functional = "cusum",
+    kind: Functional = "cusum", cfg: MethodConfig = CONFIG.method,
 ) -> np.ndarray:
     """Simulate a Brownian bridge only at the observed information times."""
     grid = np.asarray(information_time[:-1], dtype=float)
@@ -381,12 +529,11 @@ def _gaussian_bridge_statistics(
     motion = np.cumsum(increments, axis=1)
     bridge = motion[:, :-1] - grid[None, :] * motion[:, -1, None]
     if kind == "cusum":
-        fraction = CONFIG.method.minimum_information_fraction
+        fraction = cfg.minimum_information_fraction
         keep = (grid >= fraction) & (grid <= 1.0 - fraction)
         return np.max(np.abs(bridge[:, keep]), axis=1)
     if kind == "sup_lm":
-        fraction = max(CONFIG.method.minimum_information_fraction,
-                       CONFIG.method.lm_trim)
+        fraction = max(cfg.minimum_information_fraction, cfg.lm_trim)
         keep = (grid >= fraction) & (grid <= 1.0 - fraction)
         return np.max(bridge[:, keep] ** 2 / (grid[keep] * (1.0 - grid[keep])), axis=1)
     values = np.column_stack((np.zeros(samples), bridge ** 2, np.zeros(samples)))
@@ -400,7 +547,10 @@ def gradient_change_test(
     gaussian_samples: int | None = None,
     cfg: MethodConfig = CONFIG.method,
 ) -> ChangeTestResult:
-    active_cases = np.asarray(cases, dtype=float)
+    active_cases, deaths, age_scores = _arrays(cases, deaths, age_scores)
+    _validate_fit_config(cfg)
+    if not np.isfinite(cfg.alpha) or not 0 < cfg.alpha < 1:
+        raise ValueError("alpha must be finite and in (0, 1)")
     kind: Functional = "cusum"
     calibration = "kolmogorov"
     if method == "proposed_bootstrap":
@@ -416,56 +566,74 @@ def gradient_change_test(
     elif method != "proposed_asymptotic":
         raise ValueError(f"unknown method: {method}")
     statistic, change, process, information_time, fit = _observed_statistic(
-        active_cases, deaths, age_scores, backend, kind
+        active_cases, deaths, age_scores, backend, kind, cfg
     )
     boot = None
+    diagnostics = None
     if calibration == "kolmogorov":
         critical = _kolmogorov_quantile(1.0 - cfg.alpha)
         p_value = _kolmogorov_sf(statistic)
     elif calibration == "Gaussian bridge":
         if rng is None:
             raise ValueError("rng is required for Gaussian-bridge calibration")
-        count = cfg.gaussian_samples if gaussian_samples is None else int(gaussian_samples)
+        count = _positive_integer(cfg.gaussian_samples if gaussian_samples is None else gaussian_samples, "gaussian_samples")
         boot = _gaussian_bridge_statistics(
-            information_time, rng, count, kind
+            information_time, rng, count, kind, cfg
         )
-        critical = float(np.quantile(boot, 1.0 - cfg.alpha, method="higher"))
-        p_value = float((1 + np.count_nonzero(boot >= statistic)) /
-                        (count + 1))
+        if not np.all(np.isfinite(boot)):
+            raise ValueError("nonfinite Gaussian calibration statistics")
+        critical, p_value = _rank_calibration(statistic, boot, cfg.alpha)
     else:
         if rng is None:
             raise ValueError("rng is required for bootstrap calibration")
-        count = cfg.bootstrap_samples if bootstrap_samples is None else int(bootstrap_samples)
+        count = _positive_integer(cfg.bootstrap_samples if bootstrap_samples is None else bootstrap_samples, "bootstrap_samples")
+        diagnostics = {}
         boot = _bootstrap_statistics(
-            active_cases, deaths, age_scores, fit, rng, backend, kind, count
+            active_cases, deaths, age_scores, fit, rng, backend, kind, count, cfg, diagnostics
         )
-        critical = float(np.quantile(boot, 1.0 - cfg.alpha, method="higher"))
-        p_value = float((1 + np.count_nonzero(boot >= statistic)) / (count + 1))
+        critical, p_value = _rank_calibration(statistic, boot, cfg.alpha)
     return ChangeTestResult(
         statistic, critical, p_value, bool(statistic > critical), change,
-        process, information_time, fit, calibration, boot,
+        process, information_time, fit, calibration, boot, diagnostics,
     )
 
 
 def estimate_change(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
-    backend: Backend | None = None,
+    backend: Backend | None = None, cfg: MethodConfig = CONFIG.method,
 ) -> ChangeEstimate:
-    _, change, _, _, null_fit = _observed_statistic(cases, deaths, age_scores, backend, "cusum")
-    before = fit_gradient(cases[:change], deaths[:change], age_scores, backend)
-    after = fit_gradient(cases[change:], deaths[change:], age_scores, backend)
+    cases, deaths, age_scores = _arrays(cases, deaths, age_scores)
+    null_fit = fit_gradient(cases, deaths, age_scores, backend, cfg)
+    if not null_fit.success:
+        return ChangeEstimate(0, np.nan, np.nan, null_fit.beta, False, null_fit.status)
+    try:
+        _, change, _, _, _ = _statistic_from_fit(null_fit, "cusum", cfg)
+    except ValueError:
+        return ChangeEstimate(0, np.nan, np.nan, null_fit.beta, False, "no_admissible_change")
+    before = fit_gradient(cases[:change], deaths[:change], age_scores, backend, cfg)
+    after = fit_gradient(cases[change:], deaths[change:], age_scores, backend, cfg)
     return ChangeEstimate(change, before.beta, after.beta, null_fit.beta,
-                          null_fit.success and before.success and after.success)
+                          null_fit.success and before.success and after.success,
+                          next((f.status for f in (before, after) if not f.success), "converged"))
 
 
 def bootstrap_change_intervals(
     cases: np.ndarray, deaths: np.ndarray, age_scores: np.ndarray,
     rng: np.random.Generator, backend: Backend | None = None,
-    bootstrap_samples: int | None = None,
+    bootstrap_samples: int | None = None, cfg: MethodConfig = CONFIG.method,
 ) -> dict:
-    count = CONFIG.method.bootstrap_samples if bootstrap_samples is None else int(bootstrap_samples)
-    observed = estimate_change(cases, deaths, age_scores, backend)
-    totals = deaths.sum(axis=1).astype(int)
+    """Fixed-B bootstrap: retain failed rows as NaN, exclude from summaries, no retries.
+
+    The existing draws shape is preserved. Inspect bootstrap_diagnostics for the
+    per-draw status and counts; fewer than two valid draws raises BootstrapFitError.
+    """
+    cases, deaths, age_scores = _arrays(cases, deaths, age_scores)
+    _validate_fit_config(cfg)
+    count = _positive_integer(cfg.bootstrap_samples if bootstrap_samples is None else bootstrap_samples, "bootstrap_samples")
+    observed = estimate_change(cases, deaths, age_scores, backend, cfg)
+    if not observed.success or not np.all(np.isfinite([observed.beta_before, observed.beta_after, observed.null_beta])):
+        raise ValueError(f"unusable observed change fit: {observed.status}")
+    totals = _bootstrap_totals(deaths)
     probability = np.empty_like(cases, dtype=float)
     probability[: observed.change] = conditional_probabilities(
         cases[: observed.change], age_scores, observed.beta_before
@@ -481,7 +649,8 @@ def bootstrap_change_intervals(
         sampled_deaths[:, t, :] = rng.multinomial(
             int(totals[t]), probability[t], size=count
         )
-    base_draws = np.empty((count, 3), dtype=float)
+    base_draws = np.full((count, 3), np.nan)
+    statuses = np.full(count, "converged", dtype="U32")
     if resolve_backend(backend) == "c":
         active_cases = np.ascontiguousarray(cases, dtype=np.float64)
         active_deaths = np.ascontiguousarray(sampled_deaths, dtype=np.float64)
@@ -489,21 +658,26 @@ def bootstrap_change_intervals(
         changes = np.empty(count, dtype=np.int32)
         beta_before = np.empty(count, dtype=np.float64)
         beta_after = np.empty(count, dtype=np.float64)
+        fit_status = np.empty(count, dtype=np.int32)
         status = _load_c_backend().cfr_bootstrap_change_batch(
             count, cases.shape[0], cases.shape[1], active_cases.ravel(),
             active_deaths.ravel(), active_scores,
-            CONFIG.method.minimum_information_fraction, CONFIG.method.beta_bounds[0],
-            CONFIG.method.beta_bounds[1], CONFIG.method.root_tolerance,
-            CONFIG.method.root_max_iterations, changes, beta_before, beta_after,
+            cfg.minimum_information_fraction, cfg.beta_bounds[0],
+            cfg.beta_bounds[1], cfg.root_tolerance,
+            cfg.root_max_iterations, changes, beta_before, beta_after, fit_status,
         )
         if status != 0:
             raise RuntimeError("C batch bootstrap failed")
+        statuses[:] = [_FIT_STATUS[int(code)] for code in fit_status]
         base_draws[:, 0] = changes / cases.shape[0]
         base_draws[:, 1] = beta_before
         base_draws[:, 2] = beta_after
     else:
         for b in range(count):
-            fitted = estimate_change(cases, sampled_deaths[b], age_scores, backend)
+            fitted = estimate_change(cases, sampled_deaths[b], age_scores, backend, cfg)
+            if not fitted.success:
+                statuses[b] = fitted.status if fitted.status != "converged" else "fit_failed"
+                continue
             base_draws[b] = (fitted.change / cases.shape[0], fitted.beta_before, fitted.beta_after)
     draws = np.column_stack((
         base_draws,
@@ -518,11 +692,18 @@ def bootstrap_change_intervals(
         observed.beta_after - observed.beta_before,
         np.exp(observed.beta_after - observed.beta_before),
     ]
-    lower, upper = np.quantile(draws, [0.025, 0.975], axis=0)
+    statuses[(statuses == "converged") & ~np.all(np.isfinite(draws), axis=1)] = "nonfinite"
+    diagnostics = _bootstrap_diagnostics(statuses)
+    draws[~diagnostics["success_mask"]] = np.nan
+    if diagnostics["n_successful"] < 2:
+        raise BootstrapFitError(diagnostics)
+    valid = draws[diagnostics["success_mask"]]
+    lower, upper = np.quantile(valid, [0.025, 0.975], axis=0)
     return {
         "labels": ("tau_over_T", "beta_before", "beta_after", "delta", "exp_delta"),
-        "estimate": estimate, "se": draws.std(axis=0, ddof=1),
+        "estimate": estimate, "se": valid.std(axis=0, ddof=1),
         "lower": lower, "upper": upper, "draws": draws, "fit": observed,
+        "bootstrap_diagnostics": diagnostics,
     }
 
 
@@ -643,7 +824,7 @@ def verify_backend_equivalence(
 
 
 __all__ = [
-    "GradientFit", "ChangeTestResult", "ChangeEstimate", "build_c_backend",
+    "GradientFit", "ChangeTestResult", "ChangeEstimate", "BootstrapFitError", "build_c_backend",
     "delay_adjusted_exposure_python", "delay_adjusted_exposure_c", "delay_adjusted_exposure",
     "conditional_probabilities", "conditional_components_python",
     "conditional_components_c", "conditional_components", "fit_gradient_python",

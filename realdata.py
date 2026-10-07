@@ -1,4 +1,4 @@
-"""Reproduce the SIVEP-Gripe age-gradient change-point application."""
+"""Reproduce the SIVEP-Gripe delay-adjusted age-effect change analysis."""
 from __future__ import annotations
 
 import argparse
@@ -113,24 +113,65 @@ def _daily_arrays(data: pd.DataFrame, delay: np.ndarray, analysis_start, analysi
 def _plot(dates, exposure, deaths, result, intervals):
     FIGURE_DIR.mkdir(parents=True, exist_ok=True)
     dates = pd.to_datetime(np.asarray(dates))
-    plt.rcParams.update({"font.size": 8, "axes.spines.top": False, "axes.spines.right": False})
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.2), constrained_layout=True)
+    plt.rcParams.update({"font.size": 9, "legend.fontsize": 9, "axes.labelsize": 9, "xtick.labelsize": 9, "ytick.labelsize": 9, "pdf.fonttype": 42, "axes.spines.top": False, "axes.spines.right": False})
+    fig, axes = plt.subplots(2, 2, figsize=(6.5, 5.6), constrained_layout=True)
+    styles = (("o", "-", "#0072B2"), ("s", "--", "#A64B00"),
+              ("^", "-.", "#333333"), ("D", ":", "#7755AA"),
+              ("v", (0, (5, 2, 1, 2)), "#555555"),
+              ("P", (0, (3, 1, 1, 1, 1, 1)), "#AA3377"))
     for j, label in enumerate(AGE_LABELS):
-        axes[0, 0].plot(dates, exposure[:, j], lw=0.8, label=label)
-        axes[0, 1].plot(dates, deaths[:, j], lw=0.8, label=label)
+        marker, line, color = styles[j]
+        axes[0, 0].plot(dates, exposure[:, j], lw=0.9, marker=marker, markevery=35, ms=3,
+                        ls=line, color=color, label=label.replace("--", "-"))
+        axes[0, 1].plot(dates, deaths[:, j], lw=0.9, marker=marker, markevery=35, ms=3,
+                        ls=line, color=color, label=label.replace("--", "-"))
     axes[0, 0].set_ylabel("Delay-aligned case exposure")
     axes[0, 1].set_ylabel("Recorded deaths")
-    axes[0, 1].legend(ncol=2, frameon=False, fontsize=7)
-    axes[1, 0].plot(dates, result.process, color="#0072B2", lw=1.2)
-    axes[1, 0].axhline(result.critical_value, color="0.35", ls=":", lw=0.9)
-    axes[1, 0].axhline(-result.critical_value, color="0.35", ls=":", lw=0.9)
+    handles, labels = axes[0, 1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False, fontsize=9)
+    fig.get_layout_engine().set(rect=(0, 0, 1, 0.90))
+    # Use the saved observed-information clock, not a calendar-fraction trim.
+    information = np.asarray(result.information_time)
+    trim = CONFIG.method.minimum_information_fraction
+    admissible = np.flatnonzero((information[:-1] >= trim) &
+                               (information[:-1] <= 1.0 - trim))
+    if not len(admissible):
+        raise ValueError("No information-trimmed candidate dates")
+    score_ax = axes[1, 0]
+    score_ax.axvspan(dates[0], dates[admissible[0]], facecolor="0.90",
+                    edgecolor="none", lw=0, zorder=0)
+    score_ax.axvspan(dates[admissible[-1]], dates[-1], facecolor="0.90",
+                    edgecolor="none", lw=0, zorder=0)
+    absolute_score = np.abs(np.asarray(result.process))
+    searched = np.zeros(len(dates), dtype=bool)
+    searched[admissible] = True
+    score_ax.plot(dates, np.where(~searched, absolute_score, np.nan),
+                  color="0.50", ls="--", lw=1.0)
+    score_ax.plot(dates, np.where(searched, absolute_score, np.nan),
+                  color="#0072B2", lw=1.5)
+    score_ax.set_ylim(0, 4.8)
+    score_ax.set_yticks([0, 1, 2, 3, 4])
+    selected = dates[result.estimated_change - 1]
+    selected_score = absolute_score[result.estimated_change - 1]
+    score_ax.annotate(selected.strftime("%d %b %Y") + " split\n"
+                      + f"Maximum = {selected_score:.3f}",
+                      xy=(selected, selected_score),
+                      xytext=(0.40, 0.95), textcoords="axes fraction", fontsize=9,
+                      va="top", arrowprops={"arrowstyle": "->", "color": "0.25"})
+    score_ax.axhline(result.critical_value, color="#A64B00", ls="--", lw=1.5)
+    score_ax.annotate(f"5% critical value = {result.critical_value:.3f}\n(model-based)",
+                      xy=(dates[-50], result.critical_value),
+                      xytext=(0.98, 0.54), textcoords="axes fraction",
+                      ha="right", va="bottom", fontsize=9,
+                      arrowprops={"arrowstyle": "->", "color": "#A64B00"})
     axes[1, 0].axvline(dates[result.estimated_change - 1], color="#D55E00", ls="--", lw=1)
-    axes[1, 0].set_ylabel("DACT score bridge")
-    axes[1, 0].set_xlabel("Death-calendar date")
+    axes[1, 0].set_ylabel("Absolute DACT score")
+    axes[1, 0].set_xlabel("Death-calendar date\nSearch: 15-85% cumulative information")
     for ax in (axes[0, 0], axes[0, 1], axes[1, 0]):
-        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-        ax.tick_params(axis="x", labelrotation=25)
+        ax.set_xlim(dates[0], dates[-1])
+        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 5, 9)))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+        ax.tick_params(axis="x", labelrotation=0)
     reference = 2
     contrasts = AGE_SCORES - AGE_SCORES[reference]
     x = np.arange(len(AGE_LABELS))
@@ -142,7 +183,8 @@ def _plot(dates, exposure, deaths, result, intervals):
         profile = np.exp(beta * contrasts)
         bound_a = np.exp(beta_lo * contrasts)
         bound_b = np.exp(beta_hi * contrasts)
-        axes[1, 1].plot(x, profile, marker="o", ms=3.5, lw=1.25,
+        axes[1, 1].plot(x, profile, marker="o" if index == 1 else "s",
+                        ls="-" if index == 1 else "--", ms=4, lw=1.25,
                         color=color, label=name)
         axes[1, 1].fill_between(
             x, np.minimum(bound_a, bound_b), np.maximum(bound_a, bound_b),
@@ -150,15 +192,15 @@ def _plot(dates, exposure, deaths, result, intervals):
         )
     axes[1, 1].axhline(1.0, color="0.45", ls=":", lw=0.8)
     axes[1, 1].set_xticks(x, AGE_LABELS, rotation=30, ha="right")
-    axes[1, 1].set_ylabel("Model-implied relative death intensity\n(reference: 50--59 years)")
+    axes[1, 1].set_ylabel("Relative death intensity\n(ref.: 50-59 years)")
     axes[1, 1].set_xlabel("Age group")
-    axes[1, 1].legend(frameon=False, fontsize=7)
+    axes[1, 1].legend(frameon=False, fontsize=9)
     for panel, ax in enumerate(axes.ravel()):
         ax.grid(alpha=0.15)
-        ax.text(0.015, 0.97, f"({chr(97 + panel)})", transform=ax.transAxes,
-                va="top", ha="left", fontweight="bold")
-    fig.savefig(FIGURE_DIR / "figure_application.pdf", bbox_inches="tight")
-    fig.savefig(FIGURE_DIR / "figure_application.png", dpi=400, bbox_inches="tight")
+        ax.set_title(f"({chr(97 + panel)})", loc="left",
+                     fontweight="bold", fontsize=9)
+    fig.savefig(FIGURE_DIR / "figure_application.pdf", bbox_inches=None)
+    fig.savefig(FIGURE_DIR / "figure_application.png", dpi=400, bbox_inches=None)
     plt.close(fig)
 
 
@@ -191,6 +233,12 @@ def run(seed: int = 20260809, bootstrap_samples: int = 2000,
         "daily_deaths": int(deaths.sum()), "delay": delay_diagnostics,
         "statistic": result.statistic, "critical_value": result.critical_value,
         "gaussian_p_value": result.p_value, "bootstrap_p_value": validation.p_value,
+        "bootstrap_diagnostics": {
+            "null_calibration": {k: validation.bootstrap_diagnostics[k] for k in
+                ("n_requested", "n_successful", "n_failed", "n_retried", "failure_counts")},
+            "intervals": {k: intervals["bootstrap_diagnostics"][k] for k in
+                ("n_requested", "n_successful", "n_failed", "n_retried", "failure_counts")},
+        },
         "estimated_change_index": int(result.estimated_change),
         "estimated_change_date": str(dates[result.estimated_change - 1].date()),
         "beta_before": float(intervals["estimate"][1]),

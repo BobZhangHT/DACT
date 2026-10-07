@@ -7,6 +7,7 @@ used here; the B=2000 conditional-bootstrap primary analysis remains unchanged.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import pandas as pd
 
 from config import CONFIG, FIGURE_DIR
 from methods import build_c_backend, estimate_change, gradient_change_test
-from realdata import AGE_LABELS, AGE_SCORES, _daily_arrays, _delay, _read
+from realdata import AGE_LABELS, AGE_SCORES, FILES, _daily_arrays, _delay, _read
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,23 +33,37 @@ ANALYSIS_END = "2022-12-31"
 DELAY_MAXIMA = (60, 90, 120)
 
 
+def _input_hashes(paths) -> dict[str, str]:
+    """Fingerprint the actual input files without requiring a local manifest."""
+    hashes = {}
+    for path in paths:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        hashes[path.name] = digest.hexdigest()
+    return hashes
+
+
 def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
     delay_order = list(DELAY_MAXIMA)
     ordered = results.set_index("delay_maximum").reindex(delay_order)
 
     plt.rcParams.update({
-        "font.size": 8.2,
+        "font.size": 11, "legend.fontsize": 11, "axes.labelsize": 11,
+        "xtick.labelsize": 11, "ytick.labelsize": 11,
         "axes.spines.top": False,
         "axes.spines.right": False,
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
     })
-    fig, axes = plt.subplots(1, 3, figsize=(8.4, 2.8))
-    fig.subplots_adjust(left=0.075, right=0.985, bottom=0.22, top=0.86,
-                        wspace=0.38)
+    fig = plt.figure(figsize=(6.5, 5.5), constrained_layout=True)
+    grid = fig.add_gridspec(2, 2)
+    axes = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1]),
+            fig.add_subplot(grid[1, :])]
 
     panel = axes[0]
-    colors = {60: "#0072B2", 90: "#E69F00", 120: "#009E73"}
+    colors = {60: "#0072B2", 90: "#A64B00", 120: "#333333"}
     markers = {60: "o", 90: "s", 120: "^"}
     for maximum in delay_order:
         diagnostic = delay_diagnostics[maximum]
@@ -58,26 +73,24 @@ def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
         ]
         panel.plot([label.replace("--", "-") for label in AGE_LABELS],
                    np.asarray(fractions) * 100.0, marker=markers[maximum],
-                   color=colors[maximum], lw=1.25, ms=3.6,
+                   color=colors[maximum], lw=1.4, ms=5, ls={60: "-", 90: "--", 120: "-."}[maximum],
                    label=f"{maximum} days")
-    panel.set_ylabel("Observed delays omitted (%)")
+    panel.set_ylabel("Observed delays\nomitted (%)")
     panel.set_xlabel("Age group (years)")
-    panel.set_title("(a) Truncated delay tail", loc="left", fontweight="bold")
     panel.tick_params(axis="x", rotation=35)
-    panel.legend(frameon=False, title="Maximum delay", fontsize=7.2,
-                 title_fontsize=7.2)
+    panel.legend(frameon=False, title="Maximum delay", fontsize=11,
+                 title_fontsize=11)
     panel.grid(axis="y", alpha=0.2)
 
     panel = axes[1]
     panel.plot(delay_order, ordered["statistic"], color="#0072B2", marker="o",
-               lw=1.35, label=r"Test statistic $Q_T$")
+               lw=1.35, label="DACT statistic")
     panel.plot(delay_order, ordered["critical_value"], color="#D55E00",
                marker="s", ls="--", lw=1.25, label="5% critical value")
     panel.set_xticks(delay_order)
-    panel.set_xlabel("Maximum retained delay (days)")
+    panel.set_xlabel("Maximum retained delay\n(days)")
     panel.set_ylabel("Value")
-    panel.set_title("(b) Test decision", loc="left", fontweight="bold")
-    panel.legend(frameon=False, fontsize=7.2)
+    panel.legend(frameon=False, fontsize=11)
     panel.grid(axis="y", alpha=0.2)
 
     panel = axes[2]
@@ -85,19 +98,21 @@ def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
     after = np.exp(ordered["beta_after"].to_numpy(dtype=float))
     panel.plot(delay_order, before, color="#0072B2", marker="o", lw=1.35,
                label="Before change")
-    panel.plot(delay_order, after, color="#D55E00", marker="s", lw=1.35,
+    panel.plot(delay_order, after, color="#D55E00", marker="s", ls="--", lw=1.35,
                label="After change")
     panel.set_xticks(delay_order)
-    panel.set_xlabel("Maximum retained delay (days)")
+    panel.set_xlabel("Maximum retained delay\n(days)")
     panel.set_ylabel("Per-decade multiplier")
-    panel.set_title("(c) Estimated age gradient", loc="left", fontweight="bold")
-    panel.legend(frameon=False, fontsize=7.2)
+    panel.legend(frameon=False, fontsize=11)
     panel.grid(axis="y", alpha=0.2)
 
+    for index, panel in enumerate(axes):
+        panel.set_title(f"({chr(97 + index)})", loc="left",
+                        fontweight="bold", fontsize=11)
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
     FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUTPUT_PDF, bbox_inches="tight")
-    fig.savefig(PAPER_PDF, bbox_inches="tight")
+    fig.savefig(PAPER_PDF, bbox_inches=None)
+    OUTPUT_PDF.write_bytes(PAPER_PDF.read_bytes())
     plt.close(fig)
 
 
@@ -158,7 +173,7 @@ def run(seed: int = 20260809, gaussian_samples: int = 5000) -> pd.DataFrame:
 
     results = pd.DataFrame(rows)
     results.to_csv(OUTPUT_CSV, index=False)
-    input_manifest = json.loads(DATA_MANIFEST.read_text(encoding="utf-8"))
+    input_hashes = _input_hashes(FILES)
     metadata = {
         "description": (
             "Sensitivity of the prespecified full-year analysis to maximum "
@@ -170,10 +185,8 @@ def run(seed: int = 20260809, gaussian_samples: int = 5000) -> pd.DataFrame:
         "analysis_window": {"start": ANALYSIS_START, "end": ANALYSIS_END},
         "delay_maxima": list(DELAY_MAXIMA),
         "delay_diagnostics": diagnostics_by_maximum,
-        "input_manifest": str(DATA_MANIFEST),
-        "input_sha256": {
-            item["filename"]: item["sha256"] for item in input_manifest["files"]
-        },
+        "input_manifest": str(DATA_MANIFEST) if DATA_MANIFEST.exists() else None,
+        "input_sha256": input_hashes,
         "output_csv": str(OUTPUT_CSV.relative_to(ROOT)),
         "figure_pdf": str(OUTPUT_PDF.relative_to(ROOT)),
     }

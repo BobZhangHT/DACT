@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite the accompanying manuscript."
-title: "A Delay-Adjusted Change-Point Test for the Age Gradient of Case-Fatality Intensity"
+title: "A Delay-Adjusted Test for Changes in Age-Specific Fatality Patterns"
 type: software
 version: 0.1.0
 date-released: 2026-08-10
@@ -12,3 +12,5 @@ authors:
   - family-names: "Zhang"
     given-names: "Hengtao"
 license: MIT
+repository-code: "https://github.com/BobZhangHT/DACT"
+url: "https://github.com/BobZhangHT/DACT"

@@ -87,7 +87,7 @@ def testing_table(df: pd.DataFrame) -> str:
 
     lines = [
         r"\begin{table}[p]", r"\centering",
-        r"\caption{Testing performance for the daily age-gradient change test. Panel A reports Type-I error at the baseline death-information scale $s_n=1$. Panel B reports rejection probability under $|\Delta|=0.025$. MedAE is DACT's median absolute change-day error in days. Each entry uses 1000 replications.}",
+        r"\caption{Testing performance for the daily age-effect change test. Panel A reports Type-I error at the baseline death-information scale $s_n=1$. Panel B reports rejection probability under $|\Delta|=0.025$. MedAE is DACT's median absolute change-day error in days. Each entry uses 1000 replications.}",
         r"\label{tab:testing-v4}", r"\small",
         r"\renewcommand{\arraystretch}{0.98}", r"\setlength{\tabcolsep}{3.5pt}",
         r"\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llrccccc@{}}", r"\toprule",
@@ -132,7 +132,7 @@ def estimation_table(df: pd.DataFrame) -> str:
     shown["parameter_order"] = shown.parameter.map(order)
     lines = [
         r"\begin{table}[p]", r"\centering",
-        r"\caption{Post-change estimation for $T=180$. A1 and A2 have a central change; the A3 panel focuses on the early sparse case at $\tau_0/T=0.25$ and 35\% of the baseline death information. SD is the empirical standard deviation across 1000 datasets. Mean SE, coverage, and width use the search-repeated conditional bootstrap with $B=2000$.}",
+        r"\caption{Change-point and segment-parameter estimation for $T=180$. A1 and A2 have a central change; the A3 panel focuses on the early sparse case at $\tau_0/T=0.25$ and 35\% of the baseline death information. SD is the empirical standard deviation across 1000 datasets. Mean SE, coverage, and width use the search-repeated conditional bootstrap with $B=2000$.}",
         r"\label{tab:parameter-estimation-v4}", r"\small",
         r"\renewcommand{\arraystretch}{0.98}",
         r"\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llrrrrr@{}}", r"\toprule",
@@ -166,10 +166,10 @@ def sensitivity_figures(frame: pd.DataFrame, output_dir: Path, require_complete:
     if frame.empty:
         return
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary = frame.groupby(["scenario", "axis", "value"]).agg(
+    summary = frame.copy() if "rejection" in frame.columns else frame.groupby(["scenario", "axis", "value"]).agg(
         rejection=("rejected", "mean"), location_error=("location_error", "median")
     ).reset_index()
-    plt.rcParams.update({"font.size": 8, "axes.spines.top": False, "axes.spines.right": False})
+    plt.rcParams.update({"font.size": 9, "legend.fontsize": 9, "axes.labelsize": 9, "xtick.labelsize": 9, "ytick.labelsize": 9, "pdf.fonttype": 42, "axes.spines.top": False, "axes.spines.right": False})
     axes_to_plot = ("delay_multiplier", "age_delay_mismatch", "age_groups",
                     "overdispersion", "transition_width", "day_of_week")
     missing = set(axes_to_plot) - set(summary.axis.unique())
@@ -196,61 +196,76 @@ def sensitivity_figures(frame: pd.DataFrame, output_dir: Path, require_complete:
                 f"value counts: {incomplete}"
             )
     axis_labels = {
-        "delay_multiplier": "Analyzed/true delay scale",
-        "age_delay_mismatch": "Ignored age-delay slope",
-        "age_groups": "Number of age groups",
+        "delay_multiplier": "Analyzed/true\ndelay scale",
+        "age_delay_mismatch": "Ignored age-delay\nslope",
+        "age_groups": "Number of\nage groups",
         "overdispersion": "Overdispersion",
-        "transition_width": "Transition width (days)",
-        "day_of_week": "Day-of-week amplitude",
+        "transition_width": "Transition width\n(days)",
+        "day_of_week": "Day-of-week\namplitude",
     }
-    fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), constrained_layout=True)
+    fig, axes = plt.subplots(2, 3, figsize=(6.5, 4.9), constrained_layout=True)
     for panel, (ax, axis) in enumerate(zip(axes.ravel(), axes_to_plot)):
         active = summary[summary.axis == axis]
         for scenario, part in active.groupby("scenario"):
             part = part.sort_values("value")
-            ax.plot(part.value, part.rejection, marker="o", label=scenario)
+            style = {"A1": ("o", "-", "#0072B2"), "N0": ("s", "--", "#A64B00")}[scenario]
+            ax.plot(part.value, part.rejection, marker=style[0], ls=style[1],
+                    color=style[2], ms=4, lw=1.2, label=scenario)
         ax.axhline(0.05, color="black", ls="--", lw=0.8)
         ax.set_xlabel(axis_labels[axis])
-        ax.set_ylabel("Rejection probability")
+        ax.set_ylabel("Rejection probability" if panel % 3 == 0 else "")
+        ax.set_ylim(0, 1.05)
         ax.grid(alpha=0.15)
-        if not active.empty:
-            ax.legend(frameon=False)
         ax.text(0.02, 0.96, f"({chr(97 + panel)})", transform=ax.transAxes,
                 va="top", fontweight="bold")
-        if axis == "transition_width":
-            ax.text(0.98, 0.04, "A1 only", transform=ax.transAxes,
-                    ha="right", va="bottom", fontsize=7)
-    fig.savefig(output_dir / "figure_sensitivity.pdf", bbox_inches="tight")
-    fig.savefig(output_dir / "figure_sensitivity.png", dpi=400, bbox_inches="tight")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False, fontsize=9)
+    fig.get_layout_engine().set(rect=(0, 0, 1, 0.93))
+    fig.savefig(output_dir / "figure_sensitivity.pdf", bbox_inches=None)
+    fig.savefig(output_dir / "figure_sensitivity.png", dpi=400, bbox_inches=None)
     plt.close(fig)
 
 
 def power_figure(df: pd.DataFrame, output_dir: Path):
-    """Power surfaces not repeated in the central-setting testing table."""
+    """Plot frozen power summaries at the manuscript's final text width."""
     if df.empty:
         return
     active = df[(df.method == "proposed_gaussian") & (df.magnitude > 0)
                 & (df.death_scale == 1.0)]
-    fig, axes = plt.subplots(2, 3, figsize=(7.2, 4.8), sharex=True, sharey=True,
-                             constrained_layout=True)
-    for row, scenario in enumerate(("A1", "A2")):
-        for col, days in enumerate((90, 180, 365)):
-            ax = axes[row, col]
-            cell = active[(active.scenario == scenario) & (active.days == days)]
-            for fraction, part in cell.groupby("change_fraction"):
-                part = part.sort_values("magnitude")
-                ax.plot(part.magnitude, part.rejection, marker="o",
-                        label=f"$\\tau/T={fraction:.2f}$")
-            ax.set_title(f"{scenario}, $T={days}$")
-            ax.set_xlabel("Gradient-change magnitude")
-            ax.set_ylabel("Power")
-            ax.set_ylim(0, 1.02)
-            ax.grid(alpha=0.15)
-    axes[0, 0].legend(frameon=False, fontsize=7, ncol=1)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_dir / "figure_power_surface.pdf", bbox_inches="tight")
-    fig.savefig(output_dir / "figure_power_surface.png", dpi=400, bbox_inches="tight")
-    plt.close(fig)
+    with plt.rc_context({"font.size": 9, "legend.fontsize": 9,
+                         "axes.labelsize": 9, "xtick.labelsize": 9,
+                         "ytick.labelsize": 9, "pdf.fonttype": 42,
+                         "axes.spines.top": False, "axes.spines.right": False}):
+        fig, axes = plt.subplots(2, 3, figsize=(6.5, 4.3), sharex=True,
+                                 sharey=True, constrained_layout=True)
+        styles = (("o", "-", "#0072B2"), ("s", "--", "#A64B00"),
+                  ("^", "-.", "#333333"))
+        for row, scenario in enumerate(("A1", "A2")):
+            for col, days in enumerate((90, 180, 365)):
+                ax = axes[row, col]
+                cell = active[(active.scenario == scenario) & (active.days == days)]
+                for (fraction, part), (marker, line, color) in zip(
+                        cell.groupby("change_fraction"), styles):
+                    part = part.sort_values("magnitude")
+                    ax.plot(part.magnitude, part.rejection, marker=marker, ls=line,
+                            color=color, ms=4, lw=1.2,
+                            label=f"$\\tau/T={fraction:.2f}$")
+                ax.text(0.04, 0.95, f"({chr(97 + row * 3 + col)})",
+                        transform=ax.transAxes, va="top", fontweight="bold")
+                if row == 1:
+                    ax.set_xlabel("Age-effect change\nmagnitude")
+                if col == 0:
+                    ax.set_ylabel("Power")
+                ax.set_ylim(0, 1.05)
+                ax.set_xticks([0.01, 0.025, 0.04])
+                ax.grid(alpha=0.15)
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False)
+        fig.get_layout_engine().set(rect=(0, 0, 1, 0.90))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_dir / "figure_power_surface.pdf", bbox_inches=None)
+        fig.savefig(output_dir / "figure_power_surface.png", dpi=400, bbox_inches=None)
+        plt.close(fig)
 
 
 def run(mode: str):

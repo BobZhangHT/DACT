@@ -1,4 +1,4 @@
-"""Frozen configuration for the daily delay-adjusted age-gradient study."""
+"""Frozen configuration for the daily delay-adjusted age-effect study."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field

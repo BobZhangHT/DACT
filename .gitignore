@@ -5,6 +5,7 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/CHANGELOG.md
 !/LICENSE
 !/CITATION.cff
 !/requirements.txt

@@ -4,6 +4,8 @@ import numpy as np
 
 from dgp import generate_dataset
 from methods import (
+    GradientFit,
+    _process_from_fit,
     bootstrap_change_intervals,
     conditional_components_c,
     conditional_components_python,
@@ -55,6 +57,23 @@ class BackendTests(unittest.TestCase):
         self.assertAlmostEqual(p.statistic, c.statistic, places=9)
         self.assertAlmostEqual(p.critical_value, c.critical_value, places=9)
         self.assertEqual(p.rejected, c.rejected)
+
+    def test_earliest_day_resolves_information_time_ties(self):
+        fit = GradientFit(
+            beta=0.0,
+            loglik=0.0,
+            score=np.array([1.0, 0.0, 0.0, -1.0, 0.0]),
+            information=np.array([1.0, 0.0, 0.0, 1.0, 1.0]),
+            probabilities=np.full((5, 2), 0.5),
+            success=True,
+            iterations=1,
+            backend="python",
+        )
+        process, information_time, admissible = _process_from_fit(fit)
+        tied = admissible[np.isclose(information_time[admissible], 1.0 / 3.0)]
+        self.assertEqual(tied.tolist(), [0, 1, 2])
+        selected = int(admissible[np.argmax(np.abs(process[admissible]))])
+        self.assertEqual(selected, 0)
 
     def test_interval_bootstrap_equivalence(self):
         p = bootstrap_change_intervals(self.data.exposure, self.data.deaths,
