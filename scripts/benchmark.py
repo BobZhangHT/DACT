@@ -1,4 +1,5 @@
 """Reproduce the single-process runtime benchmark reported in the paper."""
+
 from __future__ import annotations
 
 import argparse
@@ -12,19 +13,32 @@ import numpy as np
 from dgp import generate_dataset
 from methods import build_c_backend, run_test
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "results_conditional_delay" / "benchmark.json"
 
 
-def benchmark(*, datasets: int = 100, samples: int = 1000,
-              seed: int = 20260809) -> dict:
-    """Time DACT, supLM, and CvM on the same pre-generated datasets."""
+def benchmark(*, datasets: int = 100, samples: int = 1000, seed: int = 20260809) -> dict:
+    """Time DACT, supLM, and CvM on the same pre-generated A1 datasets.
+
+    Args:
+        datasets: Positive number of A1 datasets generated before timing the three tests.
+        samples: Positive number of Gaussian calibration paths per timed test.
+        seed: Seed for dataset generation and deterministic method-specific calibration
+            streams.
+
+    Returns:
+        Dictionary with design, system metadata, and median/quartile elapsed seconds per
+        method. Builds/loads the C library, runs calibration draws, creates the output
+        directory, and overwrites OUTPUT with JSON.
+    """
     build_c_backend()
     data_rng = np.random.default_rng(seed)
     generated = [
         generate_dataset(
-            "A1", data_rng, days=180, change_fraction=0.50,
+            "A1",
+            data_rng,
+            days=180,
+            change_fraction=0.50,
             change_magnitude=0.025,
         )
         for _ in range(datasets)
@@ -33,21 +47,29 @@ def benchmark(*, datasets: int = 100, samples: int = 1000,
     # Load the shared library and numerical kernels before starting the clock.
     warm = generated[0]
     run_test(
-        "dact", warm.exposure, warm.deaths, warm.age_scores,
-        np.random.default_rng(seed + 1), backend="c", samples=10,
+        "dact",
+        warm.exposure,
+        warm.deaths,
+        warm.age_scores,
+        np.random.default_rng(seed + 1),
+        backend="c",
+        samples=10,
     )
 
     timings: dict[str, list[float]] = {}
     for method_index, method in enumerate(("dact", "sup_lm", "cvm")):
         elapsed = []
         for replication, data in enumerate(generated):
-            rng = np.random.default_rng(
-                seed + 100_000 * (method_index + 1) + replication
-            )
+            rng = np.random.default_rng(seed + 100_000 * (method_index + 1) + replication)
             started = time.perf_counter()
             run_test(
-                method, data.exposure, data.deaths, data.age_scores, rng,
-                backend="c", samples=samples,
+                method,
+                data.exposure,
+                data.deaths,
+                data.age_scores,
+                rng,
+                backend="c",
+                samples=samples,
             )
             elapsed.append(time.perf_counter() - started)
         timings[method] = elapsed
@@ -85,6 +107,15 @@ def benchmark(*, datasets: int = 100, samples: int = 1000,
 
 
 def main() -> None:
+    """Run the benchmark using command-line dataset, sample, and seed options.
+
+    Args:
+        None.
+
+    Returns:
+        None. Parses process arguments, executes benchmark (including its JSON file write),
+        and prints the resulting JSON to standard output.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--datasets", type=int, default=100)
     parser.add_argument("--samples", type=int, default=1000)

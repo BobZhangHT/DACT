@@ -1,0 +1,36 @@
+{
+  "official_portal": "https://dadosabertos.saude.gov.br/dataset/srag-2019-a-2026",
+  "format_disclosure": "These files are local Parquet snapshots. This manifest does not claim that Parquet was the format distributed by OpenDataSUS; the official resource listing should be cited separately and identifies CSV resources.",
+  "provenance_limit": "The original download timestamps and any CSV-to-Parquet conversion logs were not preserved in this workspace. The dates embedded in the filenames therefore must not be described as independently verified source-version dates or download dates.",
+  "files": [
+    {
+      "filename": "INFLUD21-23-03-2026.parquet",
+      "calendar_year": 2021,
+      "official_catalogue_resource_uuid": "dd91a114-47a6-4f21-bcd5-86737d4fc734",
+      "official_catalogue_resource_url": "https://opendatasus.saude.gov.br/dataset/39a4995f-4a6e-440f-8c8f-b00c81fae0d0/resource/dd91a114-47a6-4f21-bcd5-86737d4fc734",
+      "catalogue_distributed_format": "CSV",
+      "lineage_status": "The catalogue record is the year-matched public source, but the exact conversion chain to this local Parquet snapshot is not independently documented.",
+      "bytes": 127023754,
+      "rows": 1745672,
+      "columns": 194,
+      "sha256": "ecad01062f23715551a1e5e82fa1d9b28f0ea25e2c486a49518a15bf489ee790",
+      "storage_format": "Apache Parquet",
+      "parquet_created_by": "parquet-mr version 1.13.1 (build 21c9b9a53840b4e1f88bf3e61dd067d0a0dd094d)"
+    },
+    {
+      "filename": "INFLUD22-23-03-2026.parquet",
+      "calendar_year": 2022,
+      "official_catalogue_resource_uuid": "62803c57-0b2d-4bcf-b114-380c392fe825",
+      "official_catalogue_resource_url": "https://opendatasus.saude.gov.br/dataset/39a4995f-4a6e-440f-8c8f-b00c81fae0d0/resource/62803c57-0b2d-4bcf-b114-380c392fe825",
+      "catalogue_distributed_format": "CSV",
+      "lineage_status": "The catalogue record is the year-matched public source, but the exact conversion chain to this local Parquet snapshot is not independently documented.",
+      "bytes": 43750567,
+      "rows": 560577,
+      "columns": 194,
+      "sha256": "93aab4d4ef3ad87250d0179935156329f02a3b6947341654c06c1be26e67b9f1",
+      "storage_format": "Apache Parquet",
+      "parquet_created_by": "parquet-mr version 1.13.1 (build 21c9b9a53840b4e1f88bf3e61dd067d0a0dd094d)"
+    }
+  ],
+  "documentation_checked": "2026-10-18"
+}

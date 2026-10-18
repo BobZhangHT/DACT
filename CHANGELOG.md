@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased - 2026-10-18
+
+- Add a Biometrical Journal reproduction master with environment, historical
+  spot-check, cached-display, demo and full-study modes.
+- Include checksummed compact summaries for all four figures and three tables,
+  selected historical replications and binomial Monte Carlo SE exports.
+- Add README.txt, pinned dependencies, environment metadata, data provenance,
+  variable definitions, rights information and a journal-checklist record.
+- Document function inputs/outputs and C buffers; apply consistent formatting.
+- Discover compilers through PATH/CC and use platform-specific shared-library
+  flags; make directory creation an explicit workflow operation.
+- Add workflow/cache tests and a Linux CI configuration.
+
 ## Unreleased — prepared 2026-10-07
 
 ### Statistical implementation

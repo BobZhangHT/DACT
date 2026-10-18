@@ -1,0 +1,117 @@
+{
+  "analysis_start": "2022-01-01",
+  "analysis_end": "2022-12-31",
+  "eligible_history_cases": 265199,
+  "recorded_deaths_in_window": 56368,
+  "daily_deaths": 56368,
+  "delay": {
+    "training_deaths": 314096,
+    "valid_training_delays": 312421,
+    "negative_delays": 0,
+    "delay_maximum": 90,
+    "delays_over_maximum": 1675,
+    "delays_over_90": 1675,
+    "median_delay": 18.0,
+    "p90_delay": 36.0,
+    "age_counts": {
+      "0--39": 22856,
+      "40--49": 35371,
+      "50--59": 59734,
+      "60--69": 73478,
+      "70--79": 67015,
+      "80+": 53967
+    },
+    "tail_by_age": {
+      "0--39": {
+        "nonnegative_training_deaths": 22985,
+        "usable_at_maximum": 22856,
+        "above_maximum": 129,
+        "above_maximum_fraction": 0.005612355884272352
+      },
+      "40--49": {
+        "nonnegative_training_deaths": 35555,
+        "usable_at_maximum": 35371,
+        "above_maximum": 184,
+        "above_maximum_fraction": 0.005175080860638447
+      },
+      "50--59": {
+        "nonnegative_training_deaths": 60049,
+        "usable_at_maximum": 59734,
+        "above_maximum": 315,
+        "above_maximum_fraction": 0.0052457159986011425
+      },
+      "60--69": {
+        "nonnegative_training_deaths": 73900,
+        "usable_at_maximum": 73478,
+        "above_maximum": 422,
+        "above_maximum_fraction": 0.0057104194857916105
+      },
+      "70--79": {
+        "nonnegative_training_deaths": 67380,
+        "usable_at_maximum": 67015,
+        "above_maximum": 365,
+        "above_maximum_fraction": 0.005417037696645889
+      },
+      "80+": {
+        "nonnegative_training_deaths": 54227,
+        "usable_at_maximum": 53967,
+        "above_maximum": 260,
+        "above_maximum_fraction": 0.004794659486971435
+      }
+    }
+  },
+  "statistic": 3.6618326378228936,
+  "critical_value": 1.3144973205094967,
+  "gaussian_p_value": 0.0001999600079984003,
+  "bootstrap_p_value": 0.0004997501249375312,
+  "bootstrap_diagnostics": {
+    "null_calibration": {
+      "n_requested": 2000,
+      "n_successful": 2000,
+      "n_failed": 0,
+      "n_retried": 0,
+      "failure_counts": {}
+    },
+    "intervals": {
+      "n_requested": 2000,
+      "n_successful": 2000,
+      "n_failed": 0,
+      "n_retried": 0,
+      "failure_counts": {}
+    }
+  },
+  "estimated_change_index": 77,
+  "estimated_change_date": "2022-03-18",
+  "beta_before": 0.26337492375751026,
+  "beta_after": 0.22161273160600103,
+  "delta": -0.041762192151509225,
+  "gradient_ratio": 0.9590978344474113,
+  "interval_labels": [
+    "tau_over_T",
+    "beta_before",
+    "beta_after",
+    "delta",
+    "exp_delta"
+  ],
+  "interval_estimate": [
+    0.21095890410958903,
+    0.26337492375751026,
+    0.22161273160600103,
+    -0.041762192151509225,
+    0.9590978344474113
+  ],
+  "interval_lower": [
+    0.16712328767123288,
+    0.25647599242305563,
+    0.21291322770251447,
+    -0.05305717475890903,
+    0.9483257906373702
+  ],
+  "interval_upper": [
+    0.2602739726027397,
+    0.2714309870157551,
+    0.23072646558697998,
+    -0.03173094607579929,
+    0.968767197688566
+  ]
+}

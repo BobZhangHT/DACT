@@ -1,0 +1,16 @@
+{
+  "description": "Saved aggregate outputs used for manuscript rendering; spotchecks selected from the historical full-testing JSONL, not newly simulated baselines.",
+  "prepared": "2026-10-18",
+  "date_storage": "Application dates encoded as Unicode for allow_pickle=False; numerical arrays unchanged.",
+  "data_scope": "Aggregate daily series and numerical summaries only; no individual patient records.",
+  "sha256": {
+    "application_arrays.npz": "a9d162f90095c0442b2c990cc26b48890de43e2aeb7df6ff1fa378727979bf23",
+    "application_results.json": "cc2672a0ef9a5e89905fddff14e18f2f9c1754e7ad581edc367a6f3ab9653dc8",
+    "application_sensitivity.csv": "605da6f8fba3ed3875174d88755c54d16f5ba64bb00feded5622bc0c37e0b2e4",
+    "application_sensitivity_metadata.json": "229a97bd9392012a61f6dc44386b3ec8dd8c68c430e9cac590375155562807d6",
+    "full_estimation.csv": "847b4041a04b17258ffeb33d9156e50d23151da7e4ee900e123fc241dacc949e",
+    "full_sensitivity.csv": "96808860a66541e0a359163f4dd31c0cdec529b11fc70d37ba1fa0b3e92957de",
+    "full_testing.csv": "f487f8766228cb8652536f17acb682391a322d66e2086929ff31b3b906054c85",
+    "spotchecks.json": "19174f31345b671d2d90b4ad81de52e1041d7fa46a97312cede46d42708949b0"
+  }
+}

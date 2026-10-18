@@ -8,6 +8,33 @@ day's total number of deaths. The outputs combine a test, an estimated
 transition date, segment effects and search-repeated model-based intervals.
 See [CHANGELOG.md](CHANGELOG.md) for the current update.
 
+## Biometrical Journal Reproduction
+
+The journal-format instructions are in [README.txt](README.txt). They include
+software versions, data documentation, execution order and a figure/table map.
+
+```bash
+python reproduce.py --mode smoke --backend c
+python reproduce.py --mode cached
+```
+
+The first command verifies three saved simulation replications. The second
+redraws Figures 1-4 and Tables 1-3 from compact, checksummed aggregate inputs;
+it needs no patient-level data. Outputs and run metadata are written under
+`results_conditional_delay/reproduction/`.
+
+For the complete study after preparing the original input snapshots:
+
+```bash
+python reproduce.py --mode full --workers 4 --dry-run
+python reproduce.py --mode full --workers 4
+```
+
+See [reproduction instructions](reproducibility/REPRODUCIBILITY.md),
+[data documentation](reproducibility/DATA.md), and the
+[checklist record](reproducibility/CHECKLIST.md). The GitHub source and small
+aggregate references complement the separate journal Data and Software ZIP.
+
 ## Requirements
 
 - Python 3.11 or later
@@ -186,7 +213,8 @@ C-backend tests need a compiler. No surveillance microdata are needed.
 - `tests/`: numerical and pipeline tests
 
 Only these source files, tests, and repository metadata are admitted by the
-allowlist-style `.gitignore`. Local data, generated results, manuscript files,
+allowlist-style `.gitignore`, together with the documented compact references
+under `reproducibility/reference/`. Local raw data, generated results, manuscript files,
 reference papers, compiled libraries, caches, and archives remain untracked.
 
 ## License and Citation

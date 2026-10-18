@@ -1,4 +1,5 @@
 """Frozen configuration for the daily delay-adjusted age-effect study."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -21,6 +22,10 @@ Backend = Literal["c", "python"]
 
 @dataclass(frozen=True)
 class DGPConfig:
+    """Immutable defaults for observation horizons, age composition, epidemic intensity,
+    gradient changes, and discretized gamma delay distributions.
+    """
+
     case_days: int = 180
     followup_days: int = 70
     age_scores: tuple[float, ...] = (-3.0, -1.5, -0.5, 0.5, 1.5, 2.5)
@@ -39,6 +44,10 @@ class DGPConfig:
 
 @dataclass(frozen=True)
 class MethodConfig:
+    """Immutable backend, calibration, root-solver, trimming, and maturity settings. Consumers
+    use the settings relevant to their procedure.
+    """
+
     backend: Backend = "c"
     alpha: float = 0.05
     bootstrap_samples: int = 2000
@@ -54,6 +63,10 @@ class MethodConfig:
 
 @dataclass(frozen=True)
 class SimulationConfig:
+    """Immutable random seeds, replication counts, scenario lists, method names, and
+    sensitivity grids for simulation drivers.
+    """
+
     master_seed: int = 20260809
     demo_replications: int = 100
     full_replications: int = 1000
@@ -71,6 +84,15 @@ class SimulationConfig:
     transition_width_grid: tuple[int, ...] = (0, 2, 7, 14, 28)
 
     def replications(self, mode: Mode) -> int:
+        """Select the configured replication count for a run mode.
+
+        Args:
+            self: Instance whose stored configuration, data, or diagnostics are accessed.
+            mode: Replication mode, "demo" or "full".
+
+        Returns:
+            Integer demo or full replication count; unknown modes raise ValueError.
+        """
         if mode == "demo":
             return self.demo_replications
         if mode == "full":
@@ -80,11 +102,21 @@ class SimulationConfig:
 
 @dataclass(frozen=True)
 class ProjectConfig:
+    """Immutable container grouping data-generation, method, and simulation settings."""
+
     dgp: DGPConfig = field(default_factory=DGPConfig)
     method: MethodConfig = field(default_factory=MethodConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
 
     def as_dict(self) -> dict:
+        """Convert the nested project configuration to ordinary dictionaries.
+
+        Args:
+            self: Instance whose stored configuration, data, or diagnostics are accessed.
+
+        Returns:
+            Recursively converted dictionary produced by dataclasses.asdict.
+        """
         return asdict(self)
 
 
@@ -97,17 +129,39 @@ SCENARIOS: dict[str, dict] = {
     "N3": {"label": "age-specific delay", "change": False, "setting": "age_delay"},
     "A1": {"label": "central flattening", "change": True, "setting": "baseline"},
     "A2": {"label": "central steepening", "change": True, "setting": "steepening"},
-    "A3": {"label": "sparse flattening", "change": True,
-           "setting": "sparse", "change_fraction": 0.25},
+    "A3": {
+        "label": "sparse flattening",
+        "change": True,
+        "setting": "sparse",
+        "change_fraction": 0.25,
+    },
 }
 
 
 def ensure_directories() -> None:
+    """Create the raw, aggregated, figure, and table output directories.
+
+    Args:
+        None.
+
+    Returns:
+        None. Creates missing directories and parents; existing directories are retained.
+    """
     for path in (RAW_DIR, AGGREGATED_DIR, FIGURE_DIR, TABLE_DIR):
         path.mkdir(parents=True, exist_ok=True)
 
 
 def validate_config(config: ProjectConfig = CONFIG) -> None:
+    """Check age-weight consistency and fixed manuscript simulation counts.
+
+    Args:
+        config: Project configuration to check against age-weight and manuscript-design
+            constraints.
+
+    Returns:
+        None. Raises ValueError when scores/weights disagree or required
+        calibration/replication counts differ.
+    """
     dgp = config.dgp
     if len(dgp.age_scores) != len(dgp.age_weights):
         raise ValueError("age scores and weights must have equal length")
@@ -120,4 +174,3 @@ def validate_config(config: ProjectConfig = CONFIG) -> None:
 
 
 validate_config()
-ensure_directories()

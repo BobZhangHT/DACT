@@ -4,6 +4,7 @@ The prespecified full-year analysis is repeated with maximum retained
 onset-to-death delays of 60, 90, and 120 days. Gaussian-bridge calibration is
 used here; the B=2000 conditional-bootstrap primary analysis remains unchanged.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,6 @@ from config import CONFIG, FIGURE_DIR
 from methods import build_c_backend, estimate_change, gradient_change_test
 from realdata import AGE_LABELS, AGE_SCORES, FILES, _daily_arrays, _delay, _read
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DATA_MANIFEST = ROOT / "data" / "sivep" / "DATA_MANIFEST.json"
 RESULT_DIR = ROOT / "results_conditional_delay" / "application"
@@ -34,7 +34,15 @@ DELAY_MAXIMA = (60, 90, 120)
 
 
 def _input_hashes(paths) -> dict[str, str]:
-    """Fingerprint the actual input files without requiring a local manifest."""
+    """Compute SHA-256 fingerprints for the supplied input files.
+
+    Args:
+        paths: Iterable of pathlib.Path objects pointing to readable files.
+
+    Returns:
+        A dictionary mapping file basenames to hexadecimal digests. Reads each
+        file in binary chunks without modifying files or requiring a manifest.
+    """
     hashes = {}
     for path in paths:
         digest = hashlib.sha256()
@@ -45,22 +53,42 @@ def _input_hashes(paths) -> dict[str, str]:
     return hashes
 
 
-def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
+def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict], *, output_dir=None) -> None:
+    """Save the application delay-truncation sensitivity display (Figure 4).
+
+    Args:
+        results: Per-cutoff results with delay_maximum, test statistics,
+            critical values, and before/after age slopes.
+        delay_diagnostics: Diagnostics keyed by cutoff, including age-specific
+            fractions of observed nonnegative delays above the cutoff.
+        output_dir: Optional destination for the Figure 4 PDF. When provided,
+            saves only there; None uses the original figure and result paths.
+
+    Returns:
+        None. Creates output directories, changes Matplotlib
+        defaults, and saves figure_application_sensitivity.pdf. The default
+        destination also receives an application_sensitivity.pdf copy.
+        Closes the figure in both cases.
+    """
     delay_order = list(DELAY_MAXIMA)
     ordered = results.set_index("delay_maximum").reindex(delay_order)
 
-    plt.rcParams.update({
-        "font.size": 11, "legend.fontsize": 11, "axes.labelsize": 11,
-        "xtick.labelsize": 11, "ytick.labelsize": 11,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42,
-    })
+    plt.rcParams.update(
+        {
+            "font.size": 11,
+            "legend.fontsize": 11,
+            "axes.labelsize": 11,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
     fig = plt.figure(figsize=(6.5, 5.5), constrained_layout=True)
     grid = fig.add_gridspec(2, 2)
-    axes = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1]),
-            fig.add_subplot(grid[1, :])]
+    axes = [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1]), fig.add_subplot(grid[1, :])]
 
     panel = axes[0]
     colors = {60: "#0072B2", 90: "#A64B00", 120: "#333333"}
@@ -68,25 +96,42 @@ def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
     for maximum in delay_order:
         diagnostic = delay_diagnostics[maximum]
         fractions = [
-            diagnostic["tail_by_age"][label]["above_maximum_fraction"]
-            for label in AGE_LABELS
+            diagnostic["tail_by_age"][label]["above_maximum_fraction"] for label in AGE_LABELS
         ]
-        panel.plot([label.replace("--", "-") for label in AGE_LABELS],
-                   np.asarray(fractions) * 100.0, marker=markers[maximum],
-                   color=colors[maximum], lw=1.4, ms=5, ls={60: "-", 90: "--", 120: "-."}[maximum],
-                   label=f"{maximum} days")
+        panel.plot(
+            [label.replace("--", "-") for label in AGE_LABELS],
+            np.asarray(fractions) * 100.0,
+            marker=markers[maximum],
+            color=colors[maximum],
+            lw=1.4,
+            ms=5,
+            ls={60: "-", 90: "--", 120: "-."}[maximum],
+            label=f"{maximum} days",
+        )
     panel.set_ylabel("Observed delays\nomitted (%)")
     panel.set_xlabel("Age group (years)")
     panel.tick_params(axis="x", rotation=35)
-    panel.legend(frameon=False, title="Maximum delay", fontsize=11,
-                 title_fontsize=11)
+    panel.legend(frameon=False, title="Maximum delay", fontsize=11, title_fontsize=11)
     panel.grid(axis="y", alpha=0.2)
 
     panel = axes[1]
-    panel.plot(delay_order, ordered["statistic"], color="#0072B2", marker="o",
-               lw=1.35, label="DACT statistic")
-    panel.plot(delay_order, ordered["critical_value"], color="#D55E00",
-               marker="s", ls="--", lw=1.25, label="5% critical value")
+    panel.plot(
+        delay_order,
+        ordered["statistic"],
+        color="#0072B2",
+        marker="o",
+        lw=1.35,
+        label="DACT statistic",
+    )
+    panel.plot(
+        delay_order,
+        ordered["critical_value"],
+        color="#D55E00",
+        marker="s",
+        ls="--",
+        lw=1.25,
+        label="5% critical value",
+    )
     panel.set_xticks(delay_order)
     panel.set_xlabel("Maximum retained delay\n(days)")
     panel.set_ylabel("Value")
@@ -96,10 +141,10 @@ def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
     panel = axes[2]
     before = np.exp(ordered["beta_before"].to_numpy(dtype=float))
     after = np.exp(ordered["beta_after"].to_numpy(dtype=float))
-    panel.plot(delay_order, before, color="#0072B2", marker="o", lw=1.35,
-               label="Before change")
-    panel.plot(delay_order, after, color="#D55E00", marker="s", ls="--", lw=1.35,
-               label="After change")
+    panel.plot(delay_order, before, color="#0072B2", marker="o", lw=1.35, label="Before change")
+    panel.plot(
+        delay_order, after, color="#D55E00", marker="s", ls="--", lw=1.35, label="After change"
+    )
     panel.set_xticks(delay_order)
     panel.set_xlabel("Maximum retained delay\n(days)")
     panel.set_ylabel("Per-decade multiplier")
@@ -107,17 +152,37 @@ def _plot(results: pd.DataFrame, delay_diagnostics: dict[int, dict]) -> None:
     panel.grid(axis="y", alpha=0.2)
 
     for index, panel in enumerate(axes):
-        panel.set_title(f"({chr(97 + index)})", loc="left",
-                        fontweight="bold", fontsize=11)
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(PAPER_PDF, bbox_inches=None)
-    OUTPUT_PDF.write_bytes(PAPER_PDF.read_bytes())
+        panel.set_title(f"({chr(97 + index)})", loc="left", fontweight="bold", fontsize=11)
+    if output_dir is None:
+        RESULT_DIR.mkdir(parents=True, exist_ok=True)
+        FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+        paper_pdf = PAPER_PDF
+        output_pdf = OUTPUT_PDF
+    else:
+        destination = Path(output_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        paper_pdf = destination / PAPER_PDF.name
+        output_pdf = None
+    # Figure 4: application sensitivity to maximum retained onset-to-death delay.
+    fig.savefig(paper_pdf, bbox_inches=None)
+    if output_pdf is not None:
+        output_pdf.write_bytes(paper_pdf.read_bytes())
     plt.close(fig)
 
 
 def run(seed: int = 20260809, gaussian_samples: int = 5000) -> pd.DataFrame:
-    """Repeat the full-year analysis at three delay cutoffs."""
+    """Repeat the full-year application at the three fixed delay cutoffs.
+
+    Args:
+        seed: Base seed; cutoff i in DELAY_MAXIMA uses seed + i.
+        gaussian_samples: Gaussian-bridge draws for calibration at each cutoff.
+
+    Returns:
+        A DataFrame with one row per cutoff. Builds the C backend, reads the
+        configured SIVEP files, fits delays and change models, and writes the
+        sensitivity CSV, metadata JSON with input hashes, and Figure 4 PDFs.
+        Uses the same prehistory length for all cutoffs.
+    """
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
     build_c_backend()
     data = _read()
@@ -131,45 +196,54 @@ def run(seed: int = 20260809, gaussian_samples: int = 5000) -> pd.DataFrame:
     rows: list[dict] = []
     for delay_index, maximum in enumerate(DELAY_MAXIMA):
         dates, _, exposure, deaths, cohort, fatal = _daily_arrays(
-            data, delay_by_maximum[maximum], ANALYSIS_START, ANALYSIS_END,
+            data,
+            delay_by_maximum[maximum],
+            ANALYSIS_START,
+            ANALYSIS_END,
             prehistory_days=max(DELAY_MAXIMA),
         )
         cell_seed = seed + delay_index
         result = gradient_change_test(
-            exposure, deaths, AGE_SCORES, method="proposed_gaussian",
-            rng=np.random.default_rng(cell_seed), backend="c",
+            exposure,
+            deaths,
+            AGE_SCORES,
+            method="proposed_gaussian",
+            rng=np.random.default_rng(cell_seed),
+            backend="c",
             gaussian_samples=gaussian_samples,
         )
         estimate = estimate_change(exposure, deaths, AGE_SCORES, backend="c")
         delta = float(estimate.beta_after - estimate.beta_before)
         diagnostics = diagnostics_by_maximum[maximum]
-        rows.append({
-            "analysis_start": ANALYSIS_START,
-            "analysis_end": ANALYSIS_END,
-            "analysis_days": int(len(dates)),
-            "delay_maximum": maximum,
-            "eligible_history_cases": int(len(cohort)),
-            "recorded_deaths": int(len(fatal)),
-            "daily_deaths": int(deaths.sum()),
-            "delay_training_usable": diagnostics["valid_training_delays"],
-            "delay_training_above_maximum": diagnostics["delays_over_maximum"],
-            "statistic": result.statistic,
-            "critical_value": result.critical_value,
-            "statistic_to_critical": result.statistic / result.critical_value,
-            "gaussian_p_value": result.p_value,
-            "rejected_at_0.05": result.rejected,
-            "estimated_change_index": result.estimated_change,
-            "estimated_change_date": str(dates[result.estimated_change - 1].date()),
-            "null_beta": estimate.null_beta,
-            "beta_before": estimate.beta_before,
-            "beta_after": estimate.beta_after,
-            "delta": delta,
-            "gradient_ratio": float(np.exp(delta)),
-            "gaussian_samples": gaussian_samples,
-            "seed": cell_seed,
-            "calibration": "Gaussian bridge on observed information grid",
-            "analysis_role": "delay-truncation sensitivity",
-        })
+        rows.append(
+            {
+                "analysis_start": ANALYSIS_START,
+                "analysis_end": ANALYSIS_END,
+                "analysis_days": int(len(dates)),
+                "delay_maximum": maximum,
+                "eligible_history_cases": int(len(cohort)),
+                "recorded_deaths": int(len(fatal)),
+                "daily_deaths": int(deaths.sum()),
+                "delay_training_usable": diagnostics["valid_training_delays"],
+                "delay_training_above_maximum": diagnostics["delays_over_maximum"],
+                "statistic": result.statistic,
+                "critical_value": result.critical_value,
+                "statistic_to_critical": result.statistic / result.critical_value,
+                "gaussian_p_value": result.p_value,
+                "rejected_at_0.05": result.rejected,
+                "estimated_change_index": result.estimated_change,
+                "estimated_change_date": str(dates[result.estimated_change - 1].date()),
+                "null_beta": estimate.null_beta,
+                "beta_before": estimate.beta_before,
+                "beta_after": estimate.beta_after,
+                "delta": delta,
+                "gradient_ratio": float(np.exp(delta)),
+                "gaussian_samples": gaussian_samples,
+                "seed": cell_seed,
+                "calibration": "Gaussian bridge on observed information grid",
+                "analysis_role": "delay-truncation sensitivity",
+            }
+        )
 
     results = pd.DataFrame(rows)
     results.to_csv(OUTPUT_CSV, index=False)
@@ -196,14 +270,24 @@ def run(seed: int = 20260809, gaussian_samples: int = 5000) -> pd.DataFrame:
 
 
 def main() -> None:
+    """Parse sensitivity options, run the analysis, and print key results.
+
+    Returns:
+        None. Reads command-line arguments, invokes run with its computations
+        and file writes, and prints selected result columns to standard output.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--gaussian-samples", type=int, default=5000)
     args = parser.parse_args()
     results = run(seed=args.seed, gaussian_samples=args.gaussian_samples)
     columns = [
-        "delay_maximum", "statistic", "critical_value",
-        "gaussian_p_value", "estimated_change_date", "gradient_ratio",
+        "delay_maximum",
+        "statistic",
+        "critical_value",
+        "gaussian_p_value",
+        "estimated_change_date",
+        "gradient_ratio",
     ]
     print(results[columns].to_string(index=False))
 

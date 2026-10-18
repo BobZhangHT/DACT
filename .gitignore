@@ -1,14 +1,18 @@
-# Core-code-only repository: ignore everything unless explicitly allowed.
+# Source repository with compact reproduction references; allow listed paths only.
 /*
 
 # Repository metadata and documentation
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/README.txt
 !/CHANGELOG.md
 !/LICENSE
 !/CITATION.cff
 !/requirements.txt
+!/requirements-reproduction.txt
+!/ruff.toml
+!/.clang-format
 !/pytest.ini
 
 # Core Python implementation
@@ -18,6 +22,25 @@
 !/simulation.py
 !/analysis.py
 !/realdata.py
+!/reproduce.py
+
+# Compact, versioned reproducibility documentation and aggregate references
+!/reproducibility/
+/reproducibility/*
+!/reproducibility/*.md
+!/reproducibility/*.txt
+!/reproducibility/*.json
+!/reproducibility/reference/
+/reproducibility/reference/*
+!/reproducibility/reference/*.csv
+!/reproducibility/reference/*.json
+!/reproducibility/reference/application_arrays.npz
+
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/tests.yml
 
 # Native C source; compiled libraries remain local
 !/csrc/
@@ -46,3 +69,4 @@
 **/*.jsonl
 **/*.parquet
 **/*.npz
+!/reproducibility/reference/application_arrays.npz

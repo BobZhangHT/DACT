@@ -1,4 +1,5 @@
 """Reproduce the SIVEP-Gripe delay-adjusted age-effect change analysis."""
+
 from __future__ import annotations
 
 import argparse
@@ -12,7 +13,9 @@ import pandas as pd
 
 from config import CONFIG, FIGURE_DIR, TABLE_DIR
 from methods import (
-    bootstrap_change_intervals, build_c_backend, delay_adjusted_exposure,
+    bootstrap_change_intervals,
+    build_c_backend,
+    delay_adjusted_exposure,
     gradient_change_test,
 )
 
@@ -21,8 +24,16 @@ DATA = ROOT / "data" / "sivep"
 RESULT = ROOT / "results_conditional_delay" / "application"
 FILES = [DATA / "INFLUD21-23-03-2026.parquet", DATA / "INFLUD22-23-03-2026.parquet"]
 COLS = [
-    "NU_NOTIFIC", "DT_NOTIFIC", "DT_SIN_PRI", "DT_EVOLUCA",
-    "NU_IDADE_N", "TP_IDADE", "CLASSI_FIN", "CRITERIO", "HOSPITAL", "EVOLUCAO",
+    "NU_NOTIFIC",
+    "DT_NOTIFIC",
+    "DT_SIN_PRI",
+    "DT_EVOLUCA",
+    "NU_IDADE_N",
+    "TP_IDADE",
+    "CLASSI_FIN",
+    "CRITERIO",
+    "HOSPITAL",
+    "EVOLUCAO",
 ]
 AGE_LABELS = ("0--39", "40--49", "50--59", "60--69", "70--79", "80+")
 AGE_BINS = (-1, 39, 49, 59, 69, 79, 110)
@@ -30,6 +41,14 @@ AGE_SCORES = np.asarray((-3.0, -1.5, -0.5, 0.5, 1.5, 2.5))
 
 
 def _read() -> pd.DataFrame:
+    """Load, filter, and deduplicate the configured SIVEP-Gripe files.
+
+    Returns:
+        A DataFrame of laboratory-confirmed hospitalized COVID-19 records with
+        ages recorded in years from 0 through 110 and nonmissing onset dates.
+        Dates and numeric fields are coerced; the last notification per ID is
+        retained and age_group indexes AGE_BINS. Reads FILES without writing.
+    """
     frames = [pd.read_parquet(path, columns=COLS) for path in FILES]
     data = pd.concat(frames, ignore_index=True)
     for name in ("DT_NOTIFIC", "DT_SIN_PRI", "DT_EVOLUCA"):
@@ -37,9 +56,12 @@ def _read() -> pd.DataFrame:
     for name in ("NU_IDADE_N", "TP_IDADE", "CLASSI_FIN", "CRITERIO", "HOSPITAL", "EVOLUCAO"):
         data[name] = pd.to_numeric(data[name], errors="coerce")
     data = data[
-        (data["CLASSI_FIN"] == 5) & (data["CRITERIO"] == 1)
-        & (data["HOSPITAL"] == 1) & (data["TP_IDADE"] == 3)
-        & data["NU_IDADE_N"].between(0, 110) & data["DT_SIN_PRI"].notna()
+        (data["CLASSI_FIN"] == 5)
+        & (data["CRITERIO"] == 1)
+        & (data["HOSPITAL"] == 1)
+        & (data["TP_IDADE"] == 3)
+        & data["NU_IDADE_N"].between(0, 110)
+        & data["DT_SIN_PRI"].notna()
     ].copy()
     data = data.sort_values("DT_NOTIFIC").drop_duplicates("NU_NOTIFIC", keep="last")
     data["age_group"] = pd.cut(data["NU_IDADE_N"], AGE_BINS, labels=False)
@@ -47,9 +69,22 @@ def _read() -> pd.DataFrame:
 
 
 def _delay(data: pd.DataFrame, maximum: int = 90) -> tuple[np.ndarray, dict]:
+    """Estimate age-specific onset-to-death probability masses.
+
+    Args:
+        data: Eligible records from _read with onset, outcome, and age fields.
+        maximum: Largest retained nonnegative delay in days (inclusive).
+
+    Returns:
+        A tuple of a (number of age groups, maximum + 1) probability array and
+        a diagnostics dictionary. Training uses fatal cases with onset during
+        January-September 2021; each delay cell receives a 0.5 pseudocount.
+        Diagnostics include pre-truncation tails. Does not modify data or write.
+    """
     training = data[
         data["DT_SIN_PRI"].between("2021-01-01", "2021-09-30")
-        & (data["EVOLUCAO"] == 2) & data["DT_EVOLUCA"].notna()
+        & (data["EVOLUCAO"] == 2)
+        & data["DT_EVOLUCA"].notna()
     ].copy()
     training["lag"] = (training["DT_EVOLUCA"] - training["DT_SIN_PRI"]).dt.days
     raw = training["lag"]
@@ -75,20 +110,38 @@ def _delay(data: pd.DataFrame, maximum: int = 90) -> tuple[np.ndarray, dict]:
             "above_maximum_fraction": float(tail_n / denominator) if denominator else None,
         }
     diagnostics = {
-        "training_deaths": int(len(raw)), "valid_training_delays": int(len(training)),
+        "training_deaths": int(len(raw)),
+        "valid_training_delays": int(len(training)),
         "negative_delays": int((raw < 0).sum()),
         "delay_maximum": int(maximum),
         "delays_over_maximum": int((raw > maximum).sum()),
         "delays_over_90": int((raw > 90).sum()),
         "median_delay": float(training["lag"].median()),
-        "p90_delay": float(training["lag"].quantile(0.90)), "age_counts": counts,
+        "p90_delay": float(training["lag"].quantile(0.90)),
+        "age_counts": counts,
         "tail_by_age": tail_by_age,
     }
     return f, diagnostics
 
 
-def _daily_arrays(data: pd.DataFrame, delay: np.ndarray, analysis_start, analysis_end,
-                  prehistory_days: int = 120):
+def _daily_arrays(
+    data: pd.DataFrame, delay: np.ndarray, analysis_start, analysis_end, prehistory_days: int = 120
+):
+    """Construct daily case counts, delay-aligned exposures, and deaths.
+
+    Args:
+        data: Eligible records from _read with age-group indexes and dates.
+        delay: Age-by-lag delay probability matrix.
+        analysis_start: First analysis date, convertible to pandas.Timestamp.
+        analysis_end: Last analysis date, inclusive.
+        prehistory_days: Number of case-history days preceding the analysis.
+
+    Returns:
+        A tuple of analysis dates, history-period case counts, analysis-period
+        exposures, analysis-period death counts, onset-selected cohort records,
+        and outcome-date-selected fatal records. Arrays have age-group columns.
+        Uses the C exposure backend; does not write files or modify data.
+    """
     analysis_start = pd.Timestamp(analysis_start)
     analysis_end = pd.Timestamp(analysis_end)
     history_start = analysis_start - pd.Timedelta(days=prehistory_days)
@@ -101,7 +154,7 @@ def _daily_arrays(data: pd.DataFrame, delay: np.ndarray, analysis_start, analysi
         cases[(date - history_start).days, int(group)] = int(value)
     full_exposure = delay_adjusted_exposure(cases, delay, len(history_dates), backend="c")
     offset = (analysis_start - history_start).days
-    exposure = full_exposure[offset:offset + len(analysis_dates)]
+    exposure = full_exposure[offset : offset + len(analysis_dates)]
     deaths = np.zeros_like(exposure, dtype=int)
     fatal = data[(data["EVOLUCAO"] == 2) & data["DT_EVOLUCA"].between(analysis_start, analysis_end)]
     grouped = fatal.groupby(["DT_EVOLUCA", "age_group"], observed=True).size()
@@ -110,21 +163,74 @@ def _daily_arrays(data: pd.DataFrame, delay: np.ndarray, analysis_start, analysi
     return analysis_dates, cases, exposure, deaths, cohort, fatal
 
 
-def _plot(dates, exposure, deaths, result, intervals):
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+def _plot(dates, exposure, deaths, result, intervals, *, output_dir=None):
+    """Save the four-panel application display for Figure 3.
+
+    Args:
+        dates: Analysis dates aligned to the rows of exposure and deaths.
+        exposure: Daily delay-aligned case exposures by age group.
+        deaths: Daily recorded death counts by age group.
+        result: Change-test result with score process, information clock,
+            selected change index, and critical value.
+        intervals: Bootstrap estimates and bounds for the segment age slopes.
+        output_dir: Optional destination for both figure files. When provided,
+            saves only there; None uses FIGURE_DIR.
+
+    Returns:
+        None. Creates the destination, changes Matplotlib defaults, and saves and
+        closes figure_application PDF and PNG files.
+
+    Raises:
+        ValueError: No candidate dates satisfy the information-time trim.
+    """
+    destination = FIGURE_DIR if output_dir is None else Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
     dates = pd.to_datetime(np.asarray(dates))
-    plt.rcParams.update({"font.size": 9, "legend.fontsize": 9, "axes.labelsize": 9, "xtick.labelsize": 9, "ytick.labelsize": 9, "pdf.fonttype": 42, "axes.spines.top": False, "axes.spines.right": False})
+    plt.rcParams.update(
+        {
+            "font.size": 9,
+            "legend.fontsize": 9,
+            "axes.labelsize": 9,
+            "xtick.labelsize": 9,
+            "ytick.labelsize": 9,
+            "pdf.fonttype": 42,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
     fig, axes = plt.subplots(2, 2, figsize=(6.5, 5.6), constrained_layout=True)
-    styles = (("o", "-", "#0072B2"), ("s", "--", "#A64B00"),
-              ("^", "-.", "#333333"), ("D", ":", "#7755AA"),
-              ("v", (0, (5, 2, 1, 2)), "#555555"),
-              ("P", (0, (3, 1, 1, 1, 1, 1)), "#AA3377"))
+    styles = (
+        ("o", "-", "#0072B2"),
+        ("s", "--", "#A64B00"),
+        ("^", "-.", "#333333"),
+        ("D", ":", "#7755AA"),
+        ("v", (0, (5, 2, 1, 2)), "#555555"),
+        ("P", (0, (3, 1, 1, 1, 1, 1)), "#AA3377"),
+    )
     for j, label in enumerate(AGE_LABELS):
         marker, line, color = styles[j]
-        axes[0, 0].plot(dates, exposure[:, j], lw=0.9, marker=marker, markevery=35, ms=3,
-                        ls=line, color=color, label=label.replace("--", "-"))
-        axes[0, 1].plot(dates, deaths[:, j], lw=0.9, marker=marker, markevery=35, ms=3,
-                        ls=line, color=color, label=label.replace("--", "-"))
+        axes[0, 0].plot(
+            dates,
+            exposure[:, j],
+            lw=0.9,
+            marker=marker,
+            markevery=35,
+            ms=3,
+            ls=line,
+            color=color,
+            label=label.replace("--", "-"),
+        )
+        axes[0, 1].plot(
+            dates,
+            deaths[:, j],
+            lw=0.9,
+            marker=marker,
+            markevery=35,
+            ms=3,
+            ls=line,
+            color=color,
+            label=label.replace("--", "-"),
+        )
     axes[0, 0].set_ylabel("Delay-aligned case exposure")
     axes[0, 1].set_ylabel("Recorded deaths")
     handles, labels = axes[0, 1].get_legend_handles_labels()
@@ -133,37 +239,45 @@ def _plot(dates, exposure, deaths, result, intervals):
     # Use the saved observed-information clock, not a calendar-fraction trim.
     information = np.asarray(result.information_time)
     trim = CONFIG.method.minimum_information_fraction
-    admissible = np.flatnonzero((information[:-1] >= trim) &
-                               (information[:-1] <= 1.0 - trim))
+    admissible = np.flatnonzero((information[:-1] >= trim) & (information[:-1] <= 1.0 - trim))
     if not len(admissible):
         raise ValueError("No information-trimmed candidate dates")
     score_ax = axes[1, 0]
-    score_ax.axvspan(dates[0], dates[admissible[0]], facecolor="0.90",
-                    edgecolor="none", lw=0, zorder=0)
-    score_ax.axvspan(dates[admissible[-1]], dates[-1], facecolor="0.90",
-                    edgecolor="none", lw=0, zorder=0)
+    score_ax.axvspan(
+        dates[0], dates[admissible[0]], facecolor="0.90", edgecolor="none", lw=0, zorder=0
+    )
+    score_ax.axvspan(
+        dates[admissible[-1]], dates[-1], facecolor="0.90", edgecolor="none", lw=0, zorder=0
+    )
     absolute_score = np.abs(np.asarray(result.process))
     searched = np.zeros(len(dates), dtype=bool)
     searched[admissible] = True
-    score_ax.plot(dates, np.where(~searched, absolute_score, np.nan),
-                  color="0.50", ls="--", lw=1.0)
-    score_ax.plot(dates, np.where(searched, absolute_score, np.nan),
-                  color="#0072B2", lw=1.5)
+    score_ax.plot(dates, np.where(~searched, absolute_score, np.nan), color="0.50", ls="--", lw=1.0)
+    score_ax.plot(dates, np.where(searched, absolute_score, np.nan), color="#0072B2", lw=1.5)
     score_ax.set_ylim(0, 4.8)
     score_ax.set_yticks([0, 1, 2, 3, 4])
     selected = dates[result.estimated_change - 1]
     selected_score = absolute_score[result.estimated_change - 1]
-    score_ax.annotate(selected.strftime("%d %b %Y") + " split\n"
-                      + f"Maximum = {selected_score:.3f}",
-                      xy=(selected, selected_score),
-                      xytext=(0.40, 0.95), textcoords="axes fraction", fontsize=9,
-                      va="top", arrowprops={"arrowstyle": "->", "color": "0.25"})
+    score_ax.annotate(
+        selected.strftime("%d %b %Y") + " split\n" + f"Maximum = {selected_score:.3f}",
+        xy=(selected, selected_score),
+        xytext=(0.40, 0.95),
+        textcoords="axes fraction",
+        fontsize=9,
+        va="top",
+        arrowprops={"arrowstyle": "->", "color": "0.25"},
+    )
     score_ax.axhline(result.critical_value, color="#A64B00", ls="--", lw=1.5)
-    score_ax.annotate(f"5% critical value = {result.critical_value:.3f}\n(model-based)",
-                      xy=(dates[-50], result.critical_value),
-                      xytext=(0.98, 0.54), textcoords="axes fraction",
-                      ha="right", va="bottom", fontsize=9,
-                      arrowprops={"arrowstyle": "->", "color": "#A64B00"})
+    score_ax.annotate(
+        f"5% critical value = {result.critical_value:.3f}\n(model-based)",
+        xy=(dates[-50], result.critical_value),
+        xytext=(0.98, 0.54),
+        textcoords="axes fraction",
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        arrowprops={"arrowstyle": "->", "color": "#A64B00"},
+    )
     axes[1, 0].axvline(dates[result.estimated_change - 1], color="#D55E00", ls="--", lw=1)
     axes[1, 0].set_ylabel("Absolute DACT score")
     axes[1, 0].set_xlabel("Death-calendar date\nSearch: 15-85% cumulative information")
@@ -176,19 +290,31 @@ def _plot(dates, exposure, deaths, result, intervals):
     contrasts = AGE_SCORES - AGE_SCORES[reference]
     x = np.arange(len(AGE_LABELS))
     for index, (name, color) in enumerate(
-            zip(("Before change", "After change"), ("#0072B2", "#D55E00")), start=1):
+        zip(("Before change", "After change"), ("#0072B2", "#D55E00")), start=1
+    ):
         beta = intervals["estimate"][index]
         beta_lo = intervals["lower"][index]
         beta_hi = intervals["upper"][index]
         profile = np.exp(beta * contrasts)
         bound_a = np.exp(beta_lo * contrasts)
         bound_b = np.exp(beta_hi * contrasts)
-        axes[1, 1].plot(x, profile, marker="o" if index == 1 else "s",
-                        ls="-" if index == 1 else "--", ms=4, lw=1.25,
-                        color=color, label=name)
+        axes[1, 1].plot(
+            x,
+            profile,
+            marker="o" if index == 1 else "s",
+            ls="-" if index == 1 else "--",
+            ms=4,
+            lw=1.25,
+            color=color,
+            label=name,
+        )
         axes[1, 1].fill_between(
-            x, np.minimum(bound_a, bound_b), np.maximum(bound_a, bound_b),
-            color=color, alpha=0.14, linewidth=0,
+            x,
+            np.minimum(bound_a, bound_b),
+            np.maximum(bound_a, bound_b),
+            color=color,
+            alpha=0.14,
+            linewidth=0,
         )
     axes[1, 1].axhline(1.0, color="0.45", ls=":", lw=0.8)
     axes[1, 1].set_xticks(x, AGE_LABELS, rotation=30, ha="right")
@@ -197,15 +323,34 @@ def _plot(dates, exposure, deaths, result, intervals):
     axes[1, 1].legend(frameon=False, fontsize=9)
     for panel, ax in enumerate(axes.ravel()):
         ax.grid(alpha=0.15)
-        ax.set_title(f"({chr(97 + panel)})", loc="left",
-                     fontweight="bold", fontsize=9)
-    fig.savefig(FIGURE_DIR / "figure_application.pdf", bbox_inches=None)
-    fig.savefig(FIGURE_DIR / "figure_application.png", dpi=400, bbox_inches=None)
+        ax.set_title(f"({chr(97 + panel)})", loc="left", fontweight="bold", fontsize=9)
+    # Figure 3: application exposures, deaths, score, and relative age profiles.
+    fig.savefig(destination / "figure_application.pdf", bbox_inches=None)
+    fig.savefig(destination / "figure_application.png", dpi=400, bbox_inches=None)
     plt.close(fig)
 
 
-def run(seed: int = 20260809, bootstrap_samples: int = 2000,
-        analysis_start: str = "2022-01-01", analysis_end: str = "2022-12-31") -> dict:
+def run(
+    seed: int = 20260809,
+    bootstrap_samples: int = 2000,
+    analysis_start: str = "2022-01-01",
+    analysis_end: str = "2022-12-31",
+) -> dict:
+    """Fit the primary application and save its results and Figure 3.
+
+    Args:
+        seed: Base random seed; null bootstrap and interval bootstrap use
+            seed + 1 and seed + 2, respectively.
+        bootstrap_samples: Replications for null calibration and intervals.
+        analysis_start: First analysis date, inclusive.
+        analysis_end: Last analysis date, inclusive.
+
+    Returns:
+        A dictionary of cohort, delay, testing, change-point, and interval
+        summaries. Builds the C backend, reads the configured data files, and
+        writes application_results.json, application_arrays.npz, Figure 3 PDF
+        and PNG files, and the supplementary table_application.tex fragment.
+    """
     RESULT.mkdir(parents=True, exist_ok=True)
     TABLE_DIR.mkdir(parents=True, exist_ok=True)
     build_c_backend()
@@ -215,34 +360,58 @@ def run(seed: int = 20260809, bootstrap_samples: int = 2000,
         data, delay, analysis_start, analysis_end
     )
     result = gradient_change_test(
-        exposure, deaths, AGE_SCORES, "proposed_gaussian", np.random.default_rng(seed),
-        backend="c", gaussian_samples=CONFIG.method.gaussian_samples,
+        exposure,
+        deaths,
+        AGE_SCORES,
+        "proposed_gaussian",
+        np.random.default_rng(seed),
+        backend="c",
+        gaussian_samples=CONFIG.method.gaussian_samples,
     )
     validation = gradient_change_test(
-        exposure, deaths, AGE_SCORES, "proposed_bootstrap", np.random.default_rng(seed + 1),
-        backend="c", bootstrap_samples=bootstrap_samples,
+        exposure,
+        deaths,
+        AGE_SCORES,
+        "proposed_bootstrap",
+        np.random.default_rng(seed + 1),
+        backend="c",
+        bootstrap_samples=bootstrap_samples,
     )
     intervals = bootstrap_change_intervals(
-        exposure, deaths, AGE_SCORES, np.random.default_rng(seed + 2), backend="c",
+        exposure,
+        deaths,
+        AGE_SCORES,
+        np.random.default_rng(seed + 2),
+        backend="c",
         bootstrap_samples=bootstrap_samples,
     )
     delta = float(intervals["estimate"][2] - intervals["estimate"][1])
     output = {
-        "analysis_start": str(dates[0].date()), "analysis_end": str(dates[-1].date()),
-        "eligible_history_cases": int(len(cohort)), "recorded_deaths_in_window": int(len(fatal)),
-        "daily_deaths": int(deaths.sum()), "delay": delay_diagnostics,
-        "statistic": result.statistic, "critical_value": result.critical_value,
-        "gaussian_p_value": result.p_value, "bootstrap_p_value": validation.p_value,
+        "analysis_start": str(dates[0].date()),
+        "analysis_end": str(dates[-1].date()),
+        "eligible_history_cases": int(len(cohort)),
+        "recorded_deaths_in_window": int(len(fatal)),
+        "daily_deaths": int(deaths.sum()),
+        "delay": delay_diagnostics,
+        "statistic": result.statistic,
+        "critical_value": result.critical_value,
+        "gaussian_p_value": result.p_value,
+        "bootstrap_p_value": validation.p_value,
         "bootstrap_diagnostics": {
-            "null_calibration": {k: validation.bootstrap_diagnostics[k] for k in
-                ("n_requested", "n_successful", "n_failed", "n_retried", "failure_counts")},
-            "intervals": {k: intervals["bootstrap_diagnostics"][k] for k in
-                ("n_requested", "n_successful", "n_failed", "n_retried", "failure_counts")},
+            "null_calibration": {
+                k: validation.bootstrap_diagnostics[k]
+                for k in ("n_requested", "n_successful", "n_failed", "n_retried", "failure_counts")
+            },
+            "intervals": {
+                k: intervals["bootstrap_diagnostics"][k]
+                for k in ("n_requested", "n_successful", "n_failed", "n_retried", "failure_counts")
+            },
         },
         "estimated_change_index": int(result.estimated_change),
         "estimated_change_date": str(dates[result.estimated_change - 1].date()),
         "beta_before": float(intervals["estimate"][1]),
-        "beta_after": float(intervals["estimate"][2]), "delta": delta,
+        "beta_after": float(intervals["estimate"][2]),
+        "delta": delta,
         "gradient_ratio": float(np.exp(delta)),
         "interval_labels": list(intervals["labels"]),
         "interval_estimate": intervals["estimate"].tolist(),
@@ -250,29 +419,51 @@ def run(seed: int = 20260809, bootstrap_samples: int = 2000,
         "interval_upper": intervals["upper"].tolist(),
     }
     (RESULT / "application_results.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
-    np.savez_compressed(RESULT / "application_arrays.npz", dates=dates.astype(str), cases=cases,
-                        exposure=exposure, deaths=deaths, delay=delay,
-                        process=result.process, information_time=result.information_time)
+    np.savez_compressed(
+        RESULT / "application_arrays.npz",
+        dates=dates.astype(str),
+        cases=cases,
+        exposure=exposure,
+        deaths=deaths,
+        delay=delay,
+        process=result.process,
+        information_time=result.information_time,
+    )
     _plot(dates, exposure, deaths, result, intervals)
     table = (
         "\\begin{tabular}{lrrrr}\\toprule\n"
-        "Analysis & Change date & $p$ (Gaussian) & $p$ (bootstrap) & $\\exp(\\widehat\\Delta)$\\\\\n"
+        "Analysis & Change date & $p$ (Gaussian) & $p$ (bootstrap) & "
+        "$\\exp(\\widehat\\Delta)$\\\\\n"
         "\\midrule\nPrimary & %s & %.4f & %.4f & %.3f\\\\\n\\bottomrule\\end{tabular}\n"
-        % (output["estimated_change_date"], output["gaussian_p_value"],
-           output["bootstrap_p_value"], output["gradient_ratio"])
+        % (
+            output["estimated_change_date"],
+            output["gaussian_p_value"],
+            output["bootstrap_p_value"],
+            output["gradient_ratio"],
+        )
     )
     (TABLE_DIR / "table_application.tex").write_text(table, encoding="utf-8")
     return output
 
 
 def main():
+    """Parse application options, run the analysis, and print JSON results.
+
+    Returns:
+        None. Reads command-line arguments and invokes run, including its
+        backend build, data reads, statistical computations, and file writes.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bootstrap-samples", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--analysis-start", default="2022-01-01")
     parser.add_argument("--analysis-end", default="2022-12-31")
     args = parser.parse_args()
-    print(json.dumps(run(args.seed, args.bootstrap_samples, args.analysis_start, args.analysis_end), indent=2))
+    print(
+        json.dumps(
+            run(args.seed, args.bootstrap_samples, args.analysis_start, args.analysis_end), indent=2
+        )
+    )
 
 
 if __name__ == "__main__":
