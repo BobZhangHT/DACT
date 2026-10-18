@@ -9,9 +9,9 @@ replace that submission artifact.
 Installation and execution order
 
 Use Python 3.11 or later, create and activate a virtual environment as described
-in README.md, then run python -m pip install -r requirements.txt. For the
-author's pinned dependency versions, use requirements-reproduction.txt with
-Python 3.12.10. The recorded author environment is in environment.txt. The
+in README.md, then run python -m pip install -r requirements.txt. This file
+pins the author's dependency versions, tested with Python 3.12.10.
+The recorded author environment is in environment.txt. The
 programs do not install dependencies or modify global environment variables.
 
 Run commands from the project root. The master resolves its inputs relative to

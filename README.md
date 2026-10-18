@@ -54,6 +54,8 @@ On Windows PowerShell, activate the environment with
 python -m pip install -r requirements.txt
 ```
 
+`requirements.txt` contains the fixed dependency versions tested with Python 3.12.10.
+
 The C backend is compiled automatically on first use. The numerical API also
 supports `backend="python"`. The real-data command-line scripts use the C backend.
 

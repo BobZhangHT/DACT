@@ -19,7 +19,7 @@ submission upload.
 | Explicit seeds | SeedSequence task identities and documented application seeds | Implemented |
 | Intermediate-results spot checks | Historical saved cells and reproduce.py smoke/spot | Verified locally for supplied references |
 | README in TXT/HTML/PDF | Root README.txt | Included |
-| Software and OS/compiler versions | requirements-reproduction.txt; environment.txt; per-run JSON | Included |
+| Software and OS/compiler versions | requirements.txt; environment.txt; per-run JSON | Included |
 | Data provenance, variables and rights | DATA.md; data_sources.json; reference manifest | Included; original conversion logs unavailable |
 | English names and comments; UTF-8; consistent style | Documented Python/C functions, Ruff and clang-format settings | Checked locally |
 | Relative project paths | __file__-based paths; compiler from PATH or CC | Implemented |
